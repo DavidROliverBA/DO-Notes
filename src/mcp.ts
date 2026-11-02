@@ -1,12 +1,14 @@
 // MCP server at POST /mcp: Model Context Protocol over Streamable HTTP, stateless, answering
 // each JSON-RPC request with a JSON response (no SSE stream is needed for tools). Authenticated by
-// a personal MCP token in `Authorization: Bearer cpm_…` (never in the URL); the tools are in
-// src/tools.ts. Connect Claude Code with:
+// a personal MCP token in `Authorization: Bearer cpm_…` (never in the URL), pasted in or made by an
+// app signing in (src/oauth.ts, which a 401 points to); the tools are in src/tools.ts. Connect
+// Claude Code with:
 //
 //   claude mcp add --transport http commonplace https://…/mcp --header "Authorization: Bearer cpm_…"
 
 import pkg from "../package.json" with { type: "json" };
 import { HttpError, sameOrigin } from "./auth";
+import { resourceMetadataUrl } from "./oauth";
 import { authenticateToken } from "./tokens";
 import { callTool, inputSchema, type ToolCtx, toolsFor } from "./tools";
 
@@ -14,7 +16,7 @@ import { callTool, inputSchema, type ToolCtx, toolsFor } from "./tools";
 const MAX_BATCH = 20;
 const VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const INSTRUCTIONS =
-  "Commonplace is a markdown knowledge base (plain Markdown): notes in collections, linked with [[wikilinks]], tagged with #tags, with YAML properties. " +
+  "DO Notes is a markdown knowledge base (plain Markdown): notes in collections, linked with [[wikilinks]], tagged with #tags, with YAML properties. " +
   "Search before creating, so you add to an existing note rather than duplicating it. Edits merge live with people typing, and the text before each edit is kept in the note's history.";
 
 type Rpc = { jsonrpc: "2.0"; id?: string | number | null; method?: string; params?: any };
@@ -31,7 +33,7 @@ async function handle(msg: Rpc, ctx: ToolCtx): Promise<object | null> {
       return ok(msg.id, {
         protocolVersion: VERSIONS.includes(asked) ? asked : VERSIONS[0],
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: "commonplace", title: "Commonplace", version: pkg.version },
+        serverInfo: { name: "commonplace", title: "DO Notes", version: pkg.version },
         instructions: INSTRUCTIONS,
       });
     }
@@ -70,14 +72,16 @@ const json = (body: unknown, status = 200, headers: Record<string, string> = {})
 export async function mcpRoute(req: Request): Promise<Response> {
   // Browsers send Origin; a page on another site must not drive this endpoint (DNS rebinding).
   if (!sameOrigin(req)) return json(fail(null, -32600, "Cross-origin request refused"), 403);
-  if (req.method !== "POST") return new Response("Commonplace's MCP endpoint takes POST (Streamable HTTP, JSON responses).", { status: 405, headers: { Allow: "POST" } });
+  if (req.method !== "POST") return new Response("The DO Notes MCP endpoint takes POST (Streamable HTTP, JSON responses).", { status: 405, headers: { Allow: "POST" } });
 
   let token;
   try {
     token = await authenticateToken(req, "mcp");
   } catch (e) {
     const message = e instanceof HttpError ? e.message : "Unauthorised";
-    return json(fail(null, -32001, message), e instanceof HttpError ? e.status : 401, { "WWW-Authenticate": 'Bearer realm="commonplace"' });
+    return json(fail(null, -32001, message), e instanceof HttpError ? e.status : 401, {
+      "WWW-Authenticate": `Bearer realm="commonplace", ${req.headers.has("authorization") ? 'error="invalid_token", ' : ""}resource_metadata="${resourceMetadataUrl(req)}"`,
+    });
   }
   const ctx: ToolCtx = { user: token.user, canWrite: token.scope === "mcp" };
 

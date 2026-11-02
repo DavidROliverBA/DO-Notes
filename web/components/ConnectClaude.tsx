@@ -1,5 +1,6 @@
-// Settings → Connections → Connect Claude: an MCP token so Claude Code (or another agent) can
-// search, read and write your notes (src/mcp.ts, docs/MCP.md).
+// Settings → Connections → Connect Claude: the address to add as a connector in claude.ai and the
+// Claude apps, which sign in (src/oauth.ts); or an MCP token to paste into Claude Code or another
+// agent (src/mcp.ts, docs/MCP.md). Both kinds are listed here, and revoking either ends it at once.
 
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
@@ -31,12 +32,13 @@ export function ConnectClaude() {
   }
 
   async function revoke(t: Token) {
-    if (!(await confirmDialog({ title: `Revoke “${t.name}”?`, message: "Anything using it loses access to your notes at once.", action: "Revoke", danger: true }))) return;
+    const what = t.app ? "Disconnect" : "Revoke";
+    if (!(await confirmDialog({ title: `${what} “${t.name}”?`, message: `${t.app ? "It" : "Anything using it"} loses access to your notes at once.`, action: what, danger: true }))) return;
     try {
       await api(`/me/tokens/${t.id}`, { method: "DELETE" });
       if (fresh?.row.id === t.id) setFresh(null);
       await load();
-      toast(`Revoked “${t.name}”`);
+      toast(`${what === "Revoke" ? "Revoked" : "Disconnected"} “${t.name}”`);
     } catch (e) {
       toastError(e);
     }
@@ -49,8 +51,8 @@ export function ConnectClaude() {
     <section className="settings-section">
       <h3>Connect Claude</h3>
       <p className="muted">
-        Let Claude Code, or another AI agent that speaks MCP, search, read and write your notes as you. It sees every collection you can, with your role in each; its edits merge
-        with live typing and are kept in each note's history.
+        Let Claude, or another AI agent that speaks MCP, search, read and write your notes as you. It sees every collection you can, with your role in each; its edits merge with
+        live typing and are kept in each note's history.
       </p>
 
       {tokens && tokens.length > 0 && (
@@ -60,17 +62,35 @@ export function ConnectClaude() {
               <div>
                 <b>{t.name}</b>{" "}
                 <span className="muted">
-                  · {t.scope === "mcp:read" ? "read only" : "read and write"} · {t.last_used_at ? `last used ${relativeTime(t.last_used_at)}` : "not used yet"}
+                  {t.app ? `· signed in from ${t.app} ` : ""}· {t.scope === "mcp:read" ? "read only" : "read and write"} ·{" "}
+                  {t.last_used_at ? `last used ${relativeTime(t.last_used_at)}` : "not used yet"}
                 </span>
               </div>
               <button className="danger-link" onClick={() => void revoke(t)}>
-                Revoke
+                {t.app ? "Disconnect" : "Revoke"}
               </button>
             </li>
           ))}
         </ul>
       )}
 
+      <h4>claude.ai and the Claude apps</h4>
+      <p className="muted">
+        In claude.ai, open Settings → Connectors, choose Add custom connector, and paste this address. Claude sends you here to sign in and allow it; the Claude iPhone and desktop
+        apps then have it too.
+      </p>
+      <div className="copy-row">
+        <span className="copy-label">Address</span>
+        <code>{url}</code>
+        <button className="quiet" onClick={() => void copy(url, "Address")} aria-label="Copy address">
+          <Icon name="copy" size={16} /> Copy
+        </button>
+      </div>
+
+      <h4>Claude Code and other agents</h4>
+      <p className="muted">
+        Claude Code can sign in the same way (<code>claude mcp add --transport http commonplace {url}</code>, then <code>/mcp</code>), or use a token made here.
+      </p>
       {fresh ? (
         <div className="capture-setup">
           <p className="notice">

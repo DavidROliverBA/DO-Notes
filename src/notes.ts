@@ -7,12 +7,17 @@
 // routes into an open collaboration room when there is one — otherwise people editing the note
 // would have the change silently undone by their next keystroke.
 
+import { afterEdit } from "./notifications";
 import { HttpError } from "./auth";
 import { sql } from "./db";
 import { scheduleEmbedding } from "./embed";
 import { emit } from "./events";
 import { assertNoteSize, assertRoom } from "./storage";
 import { rebaseStoredDoc } from "./ydoc";
+import { canvasLinks, isCanvasPath, parseCanvas } from "./canvas";
+import { idFor, isUntitled } from "./aixfId";
+import { DAILY } from "./graphParts";
+import { withProperties } from "./props";
 import { extractLinks, extractTags, normalisePath, normaliseTarget, parseFrontmatter, rewriteWikiLinks, titleFromPath } from "./markdown";
 
 export interface NoteSummary {
@@ -26,6 +31,11 @@ export interface NoteSummary {
   created_at: string;
   /** Other names links can use (aliases, id), lowercased; null if none. */
   aliases?: string[] | null;
+  names?: string[] | null;
+  /** Its look (F28): `icon`, `cover` and `width` properties, in the list only. */
+  icon?: string | null;
+  cover?: string | null;
+  width?: "wide" | "full" | null;
 }
 
 export interface Note extends NoteSummary {
@@ -41,7 +51,7 @@ const REVISION_INTERVAL_MIN = 10;
 export const REVISIONS_KEPT = 100;
 /** Writes by agents and syncs keep the version before their first change in a burst, not one per
  *  call, so an agent looping over a note can't fill the database with copies of it. */
-const BURST_REASONS = new Set(["mcp", "ai", "github"]);
+const BURST_REASONS = new Set(["mcp", "ai", "github", "folder", "aixf", "floe"]);
 
 /** New text for a note: the whole of it, or a function of its current text (an append). */
 export type NextContent = string | ((current: string) => string);
@@ -65,7 +75,15 @@ export function writeBarrier(noteId: number): Promise<unknown> {
 
 export async function listNotes(vaultId: number): Promise<NoteSummary[]> {
   return sql<NoteSummary[]>`
-    select id, path, title, tags, updated_at, created_at, type_name as type, nullif(link_names, '{}') as aliases
+    select id, path, title, tags, updated_at, created_at, type_name as type, nullif(link_names, '{}') as aliases,
+           -- The note's look (F28): an emoji icon (a type's note uses icon for its own), cover, width.
+           case when jsonb_typeof(frontmatter->'icon') = 'string' and path !~* '^Types/[^/]+\.md$' then left(frontmatter->>'icon', 16) end as icon,
+           case when jsonb_typeof(frontmatter->'cover') = 'string' then left(frontmatter->>'cover', 1000) end as cover,
+           case when frontmatter->>'width' in ('wide', 'full') then frontmatter->>'width' end as width,
+           -- Its aliases as written (link_names has them lowercased), for the [[ suggestions.
+           (select array_agg(left(btrim(a), 200)) from jsonb_array_elements_text(case jsonb_typeof(frontmatter->'aliases')
+              when 'array' then frontmatter->'aliases' when 'string' then jsonb_build_array(frontmatter->'aliases') end) a
+            where btrim(a) <> '') as names
     from notes where vault_id = ${vaultId} order by lower(path)`;
 }
 
@@ -85,6 +103,11 @@ export async function findByPath(vaultId: number, path: string) {
 }
 
 function derive(path: string, content: string) {
+  // A board (F11) has no tags or properties; it links to the notes on its cards.
+  if (isCanvasPath(path)) {
+    const c = parseCanvas(content);
+    return { title: titleFromPath(path), tags: [] as string[], frontmatter: {}, links: c ? canvasLinks(c) : [] };
+  }
   return {
     title: titleFromPath(path),
     tags: extractTags(content),
@@ -98,6 +121,37 @@ async function writeLinks(tx: any, vaultId: number, noteId: number, links: strin
   if (links.length) {
     await tx`insert into links ${tx(links.map((target) => ({ vault_id: vaultId, source_id: noteId, target })))} on conflict do nothing`;
   }
+}
+
+/** Every AI-XF id in a collection (F9), lowercased. */
+export async function takenIds(vaultId: number, except?: number): Promise<Set<string>> {
+  const rows = await sql`select lower(frontmatter->>'id') as id from notes where vault_id = ${vaultId} and jsonb_typeof(frontmatter->'id') = 'string' and id is distinct from ${except ?? null}`;
+  return new Set(rows.map((r) => r.id as string));
+}
+
+/**
+ * A note someone is making gets its AI-XF id (F9): `id: kitchen-extension` in its properties,
+ * kept for ever. Not for boards, type notes or daily notes, a note that has one, one still called
+ * "Untitled" (it gets one when it's named), or a collection not using AI-XF. Notes that
+ * arrive from a folder, GitHub or an import keep what their file says, so they never come here.
+ */
+export async function withNewId(vaultId: number, rawPath: string, content: string): Promise<string> {
+  const path = normalisePath(rawPath);
+  const title = titleFromPath(path);
+  if (isCanvasPath(path) || /^Types\//i.test(path) || DAILY.test(path) || isUntitled(title)) return content;
+  if (parseFrontmatter(content).data.id !== undefined) return content;
+  const [v] = await sql`select aixf_ids from vaults where id = ${vaultId}`;
+  if (!v?.aixf_ids) return content;
+  return withProperties(content, { id: idFor(title, await takenIds(vaultId)) });
+}
+
+/** A note arriving from another collection keeps its id (F9), unless that one is taken here. */
+export async function keepIdIn(vaultId: number, rawPath: string, content: string): Promise<string> {
+  const id = parseFrontmatter(content).data.id;
+  if (typeof id !== "string") return content;
+  const taken = await takenIds(vaultId);
+  if (!taken.has(id.toLowerCase())) return content;
+  return withProperties(content, { id: idFor(id, taken) });
 }
 
 /** `checkRoom` false only for a restore from Trash, which moves data rather than adding it. */
@@ -120,6 +174,7 @@ export async function createNote(vaultId: number, userId: number | null, rawPath
   });
   scheduleEmbedding(id);
   emit(vaultId, { type: "note.created", id, path, by: userId });
+  void afterEdit(id, vaultId, "", content, userId).catch(() => {});
   return getNote(vaultId, id);
 }
 
@@ -153,11 +208,14 @@ export async function persist(
         updated_by = ${userId}, updated_at = now()
       where id = ${noteId} returning version`;
     await writeLinks(tx, cur.vault_id, noteId, d.links);
-    return { vaultId: cur.vault_id as number, path: cur.path as string, version: row!.version as number };
+    return { vaultId: cur.vault_id as number, path: cur.path as string, version: row!.version as number, before: cur.content as string };
   });
   if (result) {
     scheduleEmbedding(noteId);
     emit(result.vaultId, { type: "note.updated", id: noteId, path: result.path, version: result.version, by: userId });
+    // F39: mentions newly written, and the note's followers.
+    void afterEdit(noteId, result.vaultId, result.before, content, userId).catch((e) => console.warn(`notifications: ${(e as Error).message}`));
+    return { vaultId: result.vaultId, path: result.path, version: result.version };
   }
   return result;
 }
@@ -184,12 +242,14 @@ export async function overwriteContent(noteId: number, content: NextContent, use
   }
   const work = (async () => {
     await snapshot();
-    const [cur] = await sql`select content, ydoc from notes where id = ${noteId}`;
+    const [cur] = await sql`select path, content, ydoc from notes where id = ${noteId}`;
     if (!cur) throw new HttpError(404, "Note not found");
     const text = resolveNext(content, cur.content);
     assertNoteSize(text);
+    const board = isCanvasPath(cur.path);
+    if (board && !parseCanvas(text)) throw new HttpError(400, "That isn't a board: a .canvas file holds JSON Canvas (jsoncanvas.org)");
     // Never drop existing CRDT state: diff the change into it so offline clients merge cleanly.
-    const ydoc = cur.ydoc ? rebaseStoredDoc(cur.content, new Uint8Array(cur.ydoc), text) : null;
+    const ydoc = cur.ydoc ? rebaseStoredDoc(cur.content, new Uint8Array(cur.ydoc), text, board) : null;
     await persist(noteId, text, userId, ydoc, "edit");
   })();
   const prev = barriers.get(noteId) ?? Promise.resolve();
@@ -203,10 +263,31 @@ export async function overwriteContent(noteId: number, content: NextContent, use
   }
 }
 
+/**
+ * Boards (F11) were kept as plain files before they were notes: move each `.canvas` in
+ * `attachments` into `notes` at the same path, once, at boot. The text is unchanged, so a GitHub
+ * or folder collection sees no change to send.
+ */
+export async function adoptCanvasFiles(): Promise<number> {
+  const files = await sql`select vault_id, path, data, created_by from attachments where path ilike '%.canvas'`;
+  let moved = 0;
+  for (const f of files) {
+    if (!(await findByPath(f.vault_id, f.path))) {
+      await createNote(f.vault_id, f.created_by, f.path, new TextDecoder().decode(f.data).replace(/^\uFEFF/, "").replace(/\r\n/g, "\n"), false);
+      moved++;
+    }
+    await sql`delete from attachments where vault_id = ${f.vault_id} and path = ${f.path}`;
+  }
+  return moved;
+}
+
 /** Move or rename a note; with `updateLinks`, [[links]] to it in other notes are rewritten. */
 export async function renameNote(vaultId: number, id: number, rawPath: string, userId: number, updateLinks = true): Promise<Note> {
   const note = await getNote(vaultId, id);
-  const path = normalisePath(rawPath);
+  // A board stays a board (F11): "Plan" renames it to "Plan.canvas"; a note can't become one.
+  const board = isCanvasPath(note.path);
+  const path = normalisePath(board && !isCanvasPath(rawPath) ? `${rawPath.trim()}.canvas` : rawPath);
+  if (isCanvasPath(path) !== board) throw new HttpError(400, board ? "A board's name ends .canvas" : "A note can't be renamed to .canvas: make a new board instead");
   if (path === note.path) return note;
   const clash = await findByPath(vaultId, path);
   if (clash && clash.id !== id) throw new HttpError(409, `A note already exists at ${path}`);
@@ -215,13 +296,21 @@ export async function renameNote(vaultId: number, id: number, rawPath: string, u
   const linkers = updateLinks ? await backlinks(vaultId, id) : [];
   await sql`update notes set path = ${path}, title = ${titleFromPath(path)}, updated_at = now(), updated_by = ${userId} where id = ${id}`;
   emit(vaultId, { type: "note.renamed", id, path, from: note.path, by: userId });
+  // A new note gets its id (F9) when it's first named; after that, renames never change it.
+  if (isUntitled(note.title) && !isUntitled(titleFromPath(path)) && note.frontmatter?.id === undefined) {
+    const next = await withNewId(vaultId, path, "");
+    const given = next ? parseFrontmatter(next).data.id : undefined;
+    if (typeof given === "string") await overwriteContent(id, (cur) => (parseFrontmatter(cur).data.id === undefined ? withProperties(cur, { id: given }) : cur), userId);
+  }
 
   if (linkers.length) {
-    const oldKeys = new Set([note.title.toLowerCase(), note.path.replace(/\.md$/i, "").toLowerCase()]);
+    // Links to a board name it with its .canvas, as other Markdown editors do.
+    const linkName = (p: string) => (board ? p.split("/").pop()! : titleFromPath(p));
+    const oldKeys = new Set([linkName(note.path).toLowerCase(), note.path.replace(/\.md$/i, "").toLowerCase()]);
     // Keep links short, as other Markdown editors do: the bare title unless that title is now ambiguous.
     const newTitle = titleFromPath(path);
     const [{ n }] = (await sql`select count(*)::int as n from notes where vault_id = ${vaultId} and lower(title) = lower(${newTitle})`) as any;
-    const replacement = n > 1 ? path.replace(/\.md$/i, "") : newTitle;
+    const replacement = n > 1 ? path.replace(/\.md$/i, "") : linkName(path);
     for (const l of linkers) {
       const src = await getNote(vaultId, l.id);
       const next = rewriteWikiLinks(src.content, (t) => oldKeys.has(t) || [...oldKeys].some((k) => k.endsWith("/" + t)), replacement);
@@ -306,9 +395,10 @@ export async function pruneRevisions(): Promise<number> {
 /** `path` if free, else "Name 1.md", "Name 2.md"… */
 export async function freeNotePath(vaultId: number, path: string): Promise<string> {
   if (!(await findByPath(vaultId, path))) return path;
-  const base = path.replace(/\.md$/i, "");
+  const ext = isCanvasPath(path) ? ".canvas" : ".md";
+  const base = path.slice(0, path.length - (path.toLowerCase().endsWith(ext) ? ext.length : 0));
   for (let i = 1; ; i++) {
-    const candidate = `${base} ${i}.md`;
+    const candidate = `${base} ${i}${ext}`;
     if (!(await findByPath(vaultId, candidate))) return candidate;
   }
 }
@@ -439,9 +529,9 @@ export async function resolveLink(vaultId: number, target: string) {
   // Every match has the link's last segment as its title, which narrows it by index first.
   const [hit] = await sql`
     select id, path from notes
-    where vault_id = ${vaultId} and lower(title) = ${t.split("/").pop()!}
+    where vault_id = ${vaultId} and lower(title) = ${t.split("/").pop()!.replace(/\.canvas$/, "")}
       and (lower(regexp_replace(path, '\\.md$', '', 'i')) = ${t}
-           or lower(title) = ${t}
+           or (lower(title) = ${t} and path not ilike '%.canvas')
            or right(lower(regexp_replace(path, '\\.md$', '', 'i')), ${t.length + 1}) = ${"/" + t})
     order by (lower(regexp_replace(path, '\\.md$', '', 'i')) = ${t}) desc, length(path)
     limit 1`;

@@ -5,6 +5,7 @@
 // job idempotent, and `backfill()` at boot catches anything missed while the server was down or
 // after a provider switch. A failed embedding never fails a save — search falls back to keywords.
 
+import { canvasText, isCanvasPath, parseCanvas } from "./canvas";
 import { createHash } from "node:crypto";
 import { sql } from "./db";
 import { chunkNote } from "./markdown";
@@ -115,11 +116,13 @@ function contentHash(content: string): string {
 /** (Re)embed one note if its content changed since the last embedding. */
 export async function embedNote(noteId: number): Promise<"embedded" | "unchanged" | "gone" | "disabled"> {
   if (!semanticEnabled()) return "disabled";
-  const [n] = await sql`select id, vault_id, title, content, embedded_hash from notes where id = ${noteId}`;
+  const [n] = await sql`select id, vault_id, path, title, content, embedded_hash from notes where id = ${noteId}`;
   if (!n) return "gone";
   const hash = contentHash(n.content);
   if (n.embedded_hash === hash) return "unchanged";
-  const chunks = chunkNote(n.title, n.content);
+  // A board (F11) is found by the words on it, not its JSON.
+  const board = isCanvasPath(n.path) ? parseCanvas(n.content) : null;
+  const chunks = chunkNote(n.title, board ? canvasText(board) : n.content);
   const vectors: number[][] = [];
   for (let i = 0; i < chunks.length; i += 64) {
     vectors.push(...(await embedTexts(chunks.slice(i, i + 64).map((c) => c.body), "document")));

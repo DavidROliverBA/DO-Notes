@@ -60,7 +60,7 @@ export function Menu({ label, icon = "more", items, size, trigger, className }: 
 
 /** The open menu itself, placed by `anchor`: under it (or above when there's no room), lined up
  *  with its right edge, or its left with `align: "left"`. */
-function MenuPopover({ label, items, anchor, align = "right", onClose }: { label: string; items: MenuItem[]; anchor: Element; align?: "left" | "right"; onClose: (refocus?: boolean) => void }) {
+export function MenuPopover({ label, items, anchor, align = "right", onClose }: { label: string; items: MenuItem[]; anchor: Element; align?: "left" | "right"; onClose: (refocus?: boolean) => void }) {
   const [pos, setPos] = useState<{ top?: number; bottom?: number; right?: number; left?: number } | null>(null);
   const pop = useRef<HTMLDivElement>(null);
   const narrow = useNarrow();
@@ -76,8 +76,14 @@ function MenuPopover({ label, items, anchor, align = "right", onClose }: { label
     setPos(below < height + 16 && r.top > below ? { bottom: innerHeight - r.top + 4, ...x } : { top: r.bottom + 4, ...x });
   }, [narrow, anchor]);
 
+  // Focus the first item once the menu shows: a popover is hidden until it's placed, and a
+  // hidden item can't take focus.
+  const placed = narrow || pos !== null;
   useEffect(() => {
-    pop.current?.querySelector<HTMLElement>(".menu-item")?.focus();
+    if (placed && !pop.current?.contains(document.activeElement)) pop.current?.querySelector<HTMLElement>(".menu-item")?.focus();
+  }, [placed]);
+
+  useEffect(() => {
     const away = (e: PointerEvent) => {
       const t = e.target as Node;
       if (!pop.current?.contains(t) && !anchor.contains(t)) close();

@@ -79,7 +79,7 @@ async function switchBase(g: VaultGit, user: User, branch: string): Promise<void
     if (missing)
       throw new HttpError(
         409,
-        `${branch} doesn't have ${missing === 1 ? "one of this collection's files" : `${missing} of this collection's files`}, so following it would send ${missing === 1 ? "that note" : "those notes"} to Trash. Choose a branch made from ${g.base_branch}, or a new name and Commonplace makes the branch.`,
+        `${branch} doesn't have ${missing === 1 ? "one of this collection's files" : `${missing} of this collection's files`}, so following it would send ${missing === 1 ? "that note" : "those notes"} to Trash. Choose a branch made from ${g.base_branch}, or a new name and DO Notes makes the branch.`,
       );
   } else await gh.post(`${repoPath(g.repo)}/git/refs`, { ref: `refs/heads/${branch}`, sha: g.base_sha });
   await sql`update vault_git set base_branch = ${branch} where vault_id = ${g.vault_id}`;
@@ -232,16 +232,16 @@ function summary(list: Change[]): string {
 /** Other editors are named; their emails only if the vault opts in (the repo may be public). */
 function commitMessage(list: Change[], others: { name: string; email: string }[], emails: boolean): string {
   const credit = !others.length ? [] : emails ? ["", ...others.map((a) => `Co-authored-by: ${a.name} <${a.email}>`)] : ["", `Also edited by ${others.map((a) => a.name).join(", ")}.`];
-  return [summary(list), "", "Sent automatically by Commonplace.", ...credit].join("\n");
+  return [summary(list), "", "Sent automatically by DO Notes.", ...credit].join("\n");
 }
 
 function prTitle(g: VaultGit): string {
   const day = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", day: "numeric", month: "short" }).format(new Date());
-  return `Notes from Commonplace, ${g.send_every === "week" ? "week to " : ""}${day}`;
+  return `Notes from DO Notes, ${g.send_every === "week" ? "week to " : ""}${day}`;
 }
 
 function prBody(list: Change[]): string {
-  return list.map((c) => `- ${c.kind === "moved" ? `Moved ${c.from} to ${c.path}` : `${c.kind[0]!.toUpperCase()}${c.kind.slice(1)} ${c.path}`}`).join("\n") + "\n\nOpened automatically by Commonplace; later changes are added to it until it's merged.";
+  return list.map((c) => `- ${c.kind === "moved" ? `Moved ${c.from} to ${c.path}` : `${c.kind[0]!.toUpperCase()}${c.kind.slice(1)} ${c.path}`}`).join("\n") + "\n\nOpened automatically by DO Notes; later changes are added to it until it's merged.";
 }
 
 // ── the clock ────────────────────────────────────────────────────────────────────────────

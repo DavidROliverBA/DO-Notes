@@ -1,0 +1,1004 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DO Notes — Map and explorer (F42 mockup)</title>
+<style>
+/* A mockup of F42 (docs/design/F42.md): made-up notes, nothing saved. Colours and sizes are
+   The DO Notes tokens (web/styles/tokens.css). */
+:root {
+  --bg: #ffffff; --bg2: #f7f6fb; --bg3: #eeecf6; --text: #22212b; --muted: #6b6880; --line: #e2e0ec;
+  --accent: #6352c4; --accent-soft: #6352c41f; --accent-text: #ffffff; --ok: #2f8a4f; --scrim: #0f0e1659;
+  --tc-blue: #1a73e8; --tc-grey: #6b6880; --tc-green: #188038; --tc-orange: #e8710a; --tc-purple: #8430ce; --tc-pink: #c2185b; --tc-cyan: #00838f;
+  --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  --text-caption: 11px; --text-small: 12px; --text-ui-sm: 13px; --text-ui: 14px; --text-body: 15px; --text-title: 17px; --text-display: 22px;
+  --radius-sm: 4px; --radius-md: 6px; --radius: 8px; --radius-lg: 14px; --radius-pill: 999px;
+  --shadow: 0 10px 40px #1c1b2a26, 0 2px 8px #1c1b2a14; --card-shadow: 0 1px 2px #1c1b2a14;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1); --dur: 200ms; --focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+  --sidebar-w: 272px; --right-w: 320px; color-scheme: light;
+}
+:root[data-theme="dark"] {
+  --bg: #1c1b22; --bg2: #232229; --bg3: #2c2b34; --text: #e6e4ef; --muted: #a19eb3; --line: #34323e;
+  --accent: #9d8cf5; --accent-soft: #9d8cf526; --accent-text: #15141a; --ok: #6fcf8f; --scrim: #0009;
+  --tc-blue: #8ab4f8; --tc-grey: #a19eb3; --tc-green: #7ee2a8; --tc-orange: #ffb067; --tc-purple: #d7aefb; --tc-pink: #f48fb1; --tc-cyan: #78d9ec;
+  --card-shadow: 0 1px 2px #0006; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: var(--text-body)/1.45 var(--sans); }
+button { font: inherit; color: inherit; }
+.app { display: grid; grid-template-columns: var(--sidebar-w) 1fr auto; grid-template-rows: 48px 1fr; height: 100vh; }
+/* top bar */
+.top { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--bg2); }
+.brand { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.brand .dot { width: 22px; height: 22px; border-radius: var(--radius-md); background: #122a52; display: grid; place-items: center; color: #f6c453; font-size: var(--text-small); }
+.crumb { color: var(--muted); font-size: var(--text-ui-sm); }
+.spacer { flex: 1; }
+.btn { border: 1px solid var(--line); background: var(--bg); border-radius: var(--radius); padding: 5px 10px; font-size: var(--text-ui-sm); cursor: pointer; }
+.btn:hover { background: var(--bg3); }
+.btn[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.btn:focus-visible, input:focus-visible, .row:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.find { position: relative; }
+.find input { width: 240px; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: var(--radius); padding: 6px 10px; font: inherit; font-size: var(--text-ui-sm); }
+.results { position: absolute; top: 34px; left: 0; right: 0; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); z-index: 30; padding: 4px; }
+.results div { padding: 6px 8px; border-radius: var(--radius-sm); cursor: pointer; font-size: var(--text-ui-sm); }
+.results div:hover, .results div.on { background: var(--accent-soft); }
+.results small { color: var(--muted); }
+/* explorer */
+.explorer { border-right: 1px solid var(--line); background: var(--bg2); display: flex; flex-direction: column; min-height: 0; }
+.lenses { display: flex; gap: 2px; padding: 8px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.lens { border: 0; background: none; padding: 4px 8px; border-radius: var(--radius-pill); font-size: var(--text-small); color: var(--muted); cursor: pointer; }
+.lens.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.lens .n { background: var(--accent); color: var(--accent-text); border-radius: var(--radius-pill); padding: 0 6px; margin-left: 4px; font-size: var(--text-caption); }
+.tree { overflow: auto; padding: 6px 4px 24px; flex: 1; font-size: var(--text-ui); }
+.row { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap; user-select: none; }
+.row:hover { background: var(--bg3); }
+.row.sel { background: var(--accent-soft); color: var(--accent); }
+.row.drop { box-shadow: inset 0 0 0 2px var(--accent); }
+.row .tw { width: 14px; color: var(--muted); font-size: var(--text-caption); text-align: center; flex: none; }
+.row .t { overflow: hidden; text-overflow: ellipsis; }
+.row .also { color: var(--muted); font-size: var(--text-caption); }
+.grp { font-size: var(--text-caption); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; padding: 6px 6px 2px; }
+.hint { color: var(--muted); font-size: var(--text-small); padding: 8px 10px; }
+.explorer .foot { border-top: 1px solid var(--line); padding: 8px; display: flex; gap: 6px; }
+/* map */
+.map { position: relative; overflow: hidden; background: var(--bg); background-image: radial-gradient(var(--line) 1px, transparent 1px); background-size: 22px 22px; touch-action: none; cursor: grab; }
+.map.panning { cursor: grabbing; }
+.world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+svg.lines { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; z-index: 2; }
+.ln { opacity: .6; transition: opacity var(--dur) var(--ease); }
+.ln.on, .ln:hover { opacity: 1; }
+.ln .hitline { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; }
+.ln .lbl { opacity: 0; transition: opacity var(--dur) var(--ease); }
+.ln.on .lbl, .ln:hover .lbl { opacity: 1; }
+.lines-menu { min-width: 280px; }
+.lines-menu .seg { display: flex; gap: 4px; padding: 2px 6px 6px; }
+.lines-menu .seg button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 4px; font-size: var(--text-small); }
+.lines-menu .seg button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.lines-menu .kind { display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-radius: var(--radius-sm); cursor: pointer; font-size: var(--text-ui-sm); }
+.lines-menu .kind:hover { background: var(--accent-soft); }
+.lines-menu .kind small { display: block; color: var(--muted); font-size: var(--text-caption); }
+.area { position: absolute; border-radius: var(--radius-lg); border: 1px solid color-mix(in srgb, var(--c) 35%, var(--line)); background: color-mix(in srgb, var(--c) 7%, transparent); transition: box-shadow var(--dur) var(--ease); }
+.area > .head { position: absolute; left: 0; right: 0; top: 0; height: 34px; display: flex; align-items: center; gap: 6px; padding: 0 12px; font-weight: 600; font-size: var(--text-ui); color: color-mix(in srgb, var(--c) 70%, var(--text)); cursor: grab; border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+.area > .head .cnt { color: var(--muted); font-weight: 400; font-size: var(--text-small); }
+.area, .card, .strip { transition: left var(--dur) var(--ease), top var(--dur) var(--ease), width var(--dur) var(--ease), height var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
+.area.lifted, .card.lifted { transition: box-shadow var(--dur) var(--ease); z-index: 5; }
+.area.lifted { box-shadow: var(--shadow); background: color-mix(in srgb, var(--c) 10%, var(--bg)); cursor: grabbing; }
+.area { cursor: grab; }
+.area.drop, .strip.drop { box-shadow: 0 0 0 3px var(--accent); }
+.strip { position: absolute; border: 1.5px dashed var(--line); border-radius: var(--radius-lg); }
+.strip > .head { height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 14px; font-size: var(--text-ui-sm); color: var(--muted); font-weight: 600; }
+.strip .cnt, .area > .head .cnt { font-weight: 400; color: var(--muted); font-size: var(--text-small); }
+.area.sel > .head { text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
+.card { z-index: 2; position: absolute; width: 168px; height: 56px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--card-shadow); padding: 8px 10px; display: flex; flex-direction: column; justify-content: center; cursor: grab; user-select: none; transition: box-shadow var(--dur) var(--ease); }
+.card .ti { font-size: var(--text-ui); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .ty { font-size: var(--text-caption); color: var(--muted); }
+.card.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.card.multi { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent); }
+.card.drop { box-shadow: 0 0 0 3px var(--accent); }
+.card.ghost { opacity: .9; box-shadow: var(--shadow); cursor: grabbing; z-index: 5; }
+.card .multi-badge { position: absolute; right: -6px; top: -8px; font-size: var(--text-caption); background: var(--bg3); border: 1px solid var(--line); border-radius: var(--radius-pill); padding: 0 6px; color: var(--muted); }
+.handle { position: absolute; right: -7px; top: 50%; width: 14px; height: 14px; margin-top: -7px; border-radius: 50%; background: var(--bg); border: 2px solid var(--accent); opacity: 0; cursor: crosshair; transition: opacity var(--dur) var(--ease); }
+.card:hover .handle, .area > .head:hover .handle { opacity: 1; }
+.area > .head .handle { right: 8px; }
+.ctl { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 4px; }
+.ctl .btn { padding: 4px 9px; }
+.legend { position: absolute; left: 12px; bottom: 12px; font-size: var(--text-small); color: var(--muted); background: color-mix(in srgb, var(--bg) 88%, transparent); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px; max-width: 560px; }
+.legend kbd { font: var(--text-caption) var(--sans); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: var(--radius-sm); padding: 0 4px; background: var(--bg); }
+.selbar { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); background: var(--bg); border: 1px solid var(--line); box-shadow: var(--shadow); border-radius: var(--radius-pill); padding: 4px 6px 4px 14px; display: flex; gap: 8px; align-items: center; font-size: var(--text-ui-sm); }
+/* note panel */
+.panel { width: var(--right-w); border-left: 1px solid var(--line); background: var(--bg); overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.panel h2 { font-size: var(--text-display); margin: 0; display: flex; gap: 8px; align-items: center; }
+.panel .x { margin-left: auto; border: 0; background: none; font-size: var(--text-title); color: var(--muted); cursor: pointer; }
+.label { font-size: var(--text-small); color: var(--muted); margin-bottom: 4px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; background: var(--bg3); border-radius: var(--radius-pill); padding: 2px 4px 2px 10px; font-size: var(--text-ui-sm); }
+.chip .k { color: var(--muted); font-size: var(--text-caption); }
+.chip button { border: 0; background: none; color: var(--muted); cursor: pointer; border-radius: var(--radius-pill); padding: 0 5px; }
+.chip button:hover { background: var(--line); }
+.chip.add { background: none; border: 1px dashed var(--line); padding: 2px 10px; cursor: pointer; color: var(--accent); }
+.body { font-size: var(--text-body); color: var(--text); border-top: 1px solid var(--line); padding-top: 12px; }
+.body p { margin: 0 0 8px; }
+.picker { border: 1px solid var(--line); border-radius: var(--radius); padding: 6px; }
+.picker input { width: 100%; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 5px 8px; background: var(--bg); color: var(--text); font: inherit; font-size: var(--text-ui-sm); }
+.picker .opt { padding: 5px 6px; border-radius: var(--radius-sm); cursor: pointer; font-size: var(--text-ui-sm); }
+.picker .opt:hover { background: var(--accent-soft); }
+.list a { display: block; color: var(--text); text-decoration: none; padding: 2px 0; font-size: var(--text-ui-sm); cursor: pointer; }
+.list a:hover { color: var(--accent); }
+/* menus, dialogs, toast */
+.menu { position: fixed; z-index: 40; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 4px; min-width: 220px; }
+.menu .mh { font-size: var(--text-small); color: var(--muted); padding: 4px 8px; }
+.menu button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 6px 8px; border-radius: var(--radius-sm); cursor: pointer; font-size: var(--text-ui-sm); }
+.menu button:hover { background: var(--accent-soft); }
+.menu button small { color: var(--muted); display: block; font-size: var(--text-caption); }
+.scrim { position: fixed; inset: 0; background: var(--scrim); z-index: 50; display: grid; place-items: center; }
+.dialog { background: var(--bg); border-radius: var(--radius-lg); box-shadow: var(--shadow); padding: 20px; width: min(720px, 94vw); max-height: 90vh; overflow: auto; }
+.dialog h3 { margin: 0 0 6px; font-size: var(--text-title); }
+.dialog p { margin: 0 0 12px; color: var(--muted); font-size: var(--text-ui-sm); }
+.dialog .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.dialog input.name { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); color: var(--text); font: inherit; }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.cols pre { background: var(--bg2); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; font-size: var(--text-small); margin: 0; white-space: pre; overflow: auto; }
+.renames { font-size: var(--text-ui-sm); margin-top: 12px; }
+.renames li { margin-bottom: 2px; }
+.toast { position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 8px 8px 16px; border-radius: var(--radius-pill); display: flex; gap: 12px; align-items: center; font-size: var(--text-ui-sm); z-index: 60; box-shadow: var(--shadow); }
+.toast button { background: none; border: 0; color: var(--bg); font-weight: 600; cursor: pointer; padding: 4px 10px; border-radius: var(--radius-pill); }
+.toast button:hover { background: color-mix(in srgb, var(--bg) 20%, transparent); }
+.tip { position: fixed; z-index: 70; pointer-events: none; background: var(--accent); color: var(--accent-text); font-size: var(--text-small); font-weight: 600; padding: 3px 10px; border-radius: var(--radius-pill); box-shadow: var(--shadow); }
+/* tasks */
+.tasks { margin: 0 8px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 10px 12px; font-size: var(--text-ui-sm); max-height: 46%; overflow: auto; flex: none; }
+.tasks h4 { margin: 0 0 6px; font-size: var(--text-ui); display: flex; }
+.tasks h4 button { margin-left: auto; border: 0; background: none; color: var(--muted); cursor: pointer; }
+.tasks ol { margin: 0; padding-left: 0; list-style: none; }
+.tasks li { display: flex; gap: 8px; padding: 4px 0; }
+.tasks li .ck { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--line); display: grid; place-items: center; font-size: var(--text-caption); }
+.tasks li.done .ck { background: var(--ok); border-color: var(--ok); color: var(--bg); }
+.tasks li.done span:last-child { color: var(--muted); text-decoration: line-through; }
+.tasks .all { color: var(--ok); font-weight: 600; margin-top: 6px; }
+.tasks.min ol, .tasks.min .all { display: none; }
+/* phone */
+.phone-frame { width: 390px; height: 780px; border: 10px solid #111; border-radius: 44px; overflow: hidden; background: #111; }
+.phone-frame iframe { width: 100%; height: 100%; border: 0; border-radius: 34px; background: var(--bg); }
+body.phone .app { grid-template-columns: 1fr; grid-template-rows: 48px 1fr; }
+body.phone .top { padding-top: 0; }
+body.phone .crumb, body.phone .find, body.phone #convert, body.phone #phoneBtn, body.phone .legend, body.phone .tasks { display: none; }
+body.phone .explorer { position: fixed; top: 48px; bottom: 0; left: 0; width: 86%; z-index: 40; box-shadow: var(--shadow); transform: translateX(-102%); transition: transform var(--dur) var(--ease); }
+body.phone.drawer .explorer { transform: none; }
+body.phone .panel { position: fixed; left: 0; right: 0; bottom: 0; width: auto; height: 62%; border-left: 0; border-top: 1px solid var(--line); border-radius: var(--radius-lg) var(--radius-lg) 0 0; box-shadow: var(--shadow); z-index: 45; }
+body.phone .panel::before { content: ""; display: block; width: 40px; height: 4px; border-radius: var(--radius-pill); background: var(--line); margin: -6px auto 0; }
+#menuBtn { display: none; }
+body.phone #menuBtn { display: inline-block; }
+body.phone .ctl { bottom: 16px; }
+body.phone .find-phone { display: block; }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <header class="top">
+    <button class="btn" id="menuBtn" aria-label="Show the explorer">☰</button>
+    <div class="brand"><span class="dot" aria-hidden="true">●</span>DO Notes</div>
+    <span class="crumb">Home collection · Map</span>
+    <div class="spacer"></div>
+    <div class="find">
+      <input id="find" placeholder="Find a note…  ⌘K" aria-label="Find a note" autocomplete="off">
+      <div class="results" id="results" hidden></div>
+    </div>
+    <button class="btn" id="convert">Convert folders…</button>
+    <button class="btn" id="phoneBtn">Phone view</button>
+    <button class="btn" id="themeBtn" aria-label="Switch light and dark">◐</button>
+  </header>
+  <nav class="explorer" aria-label="Explorer">
+    <div class="lenses" role="tablist" id="lenses"></div>
+    <div class="tree" id="tree" role="tree"></div>
+    <div class="tasks" id="tasks"></div>
+    <div class="foot"><button class="btn" id="newNote">+ New note</button></div>
+  </nav>
+  <main class="map" id="map" aria-label="Map">
+    <div class="world" id="world"><svg class="lines" id="lines" width="1" height="1"></svg></div>
+    <div class="legend" id="legend"><button class="x" data-legend aria-label="Hide these tips" style="float:right;border:0;background:none;color:var(--muted);cursor:pointer">×</button>Drag a note or a box to move it (with <b>Arrange</b> on, the others make room) · drop a note in a box to put it there, or hold it over a note to put it inside · hold <kbd>⌥</kbd> to put it in a second place too · drag from <b>○</b> to link two notes · <kbd>⇧</kbd>-click to pick several, <kbd>⌘G</kbd> to group · scroll to move, <kbd>⌃</kbd>/pinch to zoom · double-click an area to zoom in</div>
+    <div class="ctl"><button class="btn" id="zoomOut" aria-label="Zoom out">−</button><button class="btn" id="fit">Fit</button><button class="btn" id="zoomIn" aria-label="Zoom in">+</button><button class="btn" id="floeBtn" aria-haspopup="menu" title="Lay the map out as Floe's Tidy does">⇶ Tidy</button><button class="btn" id="tidyBtn" aria-pressed="true" title="On: boxes arrange themselves and make room as you drag. Off: notes and boxes stay where you put them.">Arrange</button><button class="btn" id="linksBtn" aria-haspopup="menu">Lines ▾</button></div>
+    <div class="selbar" id="selbar" hidden></div>
+  </main>
+  <aside class="panel" id="panel" hidden></aside>
+</div>
+<div id="layer"></div>
+<div class="tip" id="tip" hidden></div>
+
+<script src="F42-elk.js"></script>
+<script>
+const map = document.querySelector("#map");
+// ── data: made-up household notes ─────────────────────────────────────────────────────────
+const KINDS = {
+  "part-of": { label: "Part of", back: "Has part", group: "Parts", nests: true, line: { colour: "--accent", dash: "", end: "diamond", says: "in a second place" } },
+  "depends-on": { label: "Depends on", back: "Depended on by", group: "Depends on it", nests: true, line: { colour: "--tc-orange", dash: "8 5", end: "arrow", says: "needs it" } },
+  "references": { label: "References", back: "Referenced by", group: "References it", nests: true, line: { colour: "--tc-blue", dash: "1 5", end: "chevron", says: "points at it" } },
+  "relates-to": { label: "Relates to", back: "Relates to", nests: false, line: { colour: "--tc-grey", dash: "", start: "dot", end: "dot", says: "connected, both ways" } },
+};
+const SHAPES = { curved: "Curved", straight: "Straight", elbow: "Right angles" };
+/** End marks, one set per kind so each takes its kind's colour. */
+function markerDefs() {
+  const mk = { arrow: 'M0 0L10 5L0 10z', chevron: 'M1 1L9 5L1 9', diamond: 'M0 5L5 0L10 5L5 10z', dot: '' };
+  return Object.entries(KINDS).map(([k, { line }]) => ["start", "end"].map((at) => {
+    const m = line[at]; if (!m) return "";
+    const c = `var(${line.colour})`, shape = m === "dot" ? `<circle cx="5" cy="5" r="3.5" fill="${c}"/>` : m === "chevron" ? `<path d="${mk[m]}" fill="none" stroke="${c}" stroke-width="1.8" stroke-linejoin="round"/>` : `<path d="${mk[m]}" fill="${c}"/>`;
+    return `<marker id="m-${k}-${at}" viewBox="0 0 10 10" refX="${m === "dot" ? 5 : 9}" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse" markerUnits="userSpaceOnUse">${shape}</marker>`;
+  }).join("")).join("");
+}
+/** A small sample of a kind's line, for the Lines menu and the link menu. */
+function sample(k) {
+  const { line } = KINDS[k];
+  return `<svg width="44" height="12" viewBox="0 0 44 12" aria-hidden="true" style="vertical-align:middle;overflow:visible"><defs>${markerDefs()}</defs><path d="M3 6H40" stroke="var(${line.colour})" stroke-width="2" stroke-dasharray="${line.dash}" stroke-linecap="round" ${line.start ? `marker-start="url(#m-${k}-start)"` : ""} marker-end="url(#m-${k}-end)"/></svg>`;
+}
+const COLOURS = ["--tc-blue", "--tc-green", "--tc-orange", "--tc-purple", "--tc-pink", "--tc-cyan"];
+const BODY = {
+  "Kitchen plan": "Units along the north wall, the sink under the window. Waiting on the budget before ordering.",
+  "Tiles": "Metro tiles, white, 10×20. Topps quoted £18/m²; Howdens can match. Need about 9 m².",
+  "Budget 2027": "Kitchen £14,000 · Garden £1,200 · Contingency 10%.",
+  "Raised beds": "Two beds, 2.4 × 1.2 m, oak sleepers. Fill with topsoil and compost, 60/40.",
+  "Planting calendar": "March: broad beans. April: potatoes, carrots. May: courgettes, beans.",
+  "Alex": "Wants the herbs by the back door.",
+};
+function seed() {
+  const N = [
+    [1, "House", "🏠", "Area", 40, 40], [2, "Kitchen project", "🍳", "Project", 60, 80], [3, "Kitchen plan", "📄", "Note", 80, 120],
+    [4, "Tiles", "📄", "Note", 268, 120], [5, "Budget 2027", "💷", "Note", 80, 196], [6, "Garden", "🌱", "Project", 500, 80],
+    [7, "Raised beds", "📄", "Note", 520, 120], [8, "Planting calendar", "📅", "Note", 520, 196], [9, "Suppliers", "🏢", "Area", 820, 40],
+    [10, "Howdens", "🏢", "Company", 840, 80], [11, "Topps Tiles", "🏢", "Company", 1028, 80], [12, "People", "👥", "Area", 820, 220],
+    [13, "Alex", "👤", "Person", 840, 260], [14, "Sam (builder)", "👤", "Person", 1028, 260], [15, "Boiler service", "🔧", "Task", 80, 400],
+    [16, "Paint colours", "🎨", "Note", 268, 400], [17, "Shed ideas", "💡", "Note", 456, 400],
+  ];
+  const notes = {};
+  N.forEach(([id, title, icon, type], i) => (notes[id] = { id, title, icon, type, o: i }));
+  const edges = [
+    [3, 2, "part-of"], [4, 2, "part-of"], [5, 2, "part-of"], [2, 1, "part-of"], [6, 1, "part-of"], [7, 6, "part-of"], [8, 6, "part-of"],
+    [10, 9, "part-of"], [11, 9, "part-of"], [13, 12, "part-of"], [14, 12, "part-of"], [3, 5, "depends-on"], [4, 11, "references"], [14, 2, "relates-to"],
+  ].map(([from, to, kind]) => ({ from, to, kind }));
+  return { notes, edges, nextId: 100 };
+}
+let S = seed();
+const V = { shape: "curved", kindsShown: new Set(["part-of", "depends-on", "references", "relates-to"]), tidy: true, open: null, sel: new Set(), lens: "places", expanded: new Set(["1", "9", "12", "1/2", "1/6"]), tx: 20, ty: 20, k: 1, links: true, drag: null, link: null, undo: [], undid: false, picker: false, filter: "" };
+
+// ── relationships ─────────────────────────────────────────────────────────────────────────
+const nests = (e) => KINDS[e.kind].nests;
+const partParents = (id) => S.edges.filter((e) => e.from === id && e.kind === "part-of").map((e) => e.to);
+const nestParents = (id) => S.edges.filter((e) => e.from === id && nests(e));
+const loose = (id) => !S.edges.some((e) => e.from === id || e.to === id);
+function chainHas(p, id) { for (let i = 0, c = p; c != null && i < 60; i++) { if (c === id) return true; c = partParents(c)[0]; } return false; }
+/** The area a note is drawn in on the map: its first part-of parent that isn't inside it. */
+function primary(id) { return partParents(id).find((p) => !chainHas(p, id)) ?? null; }
+const mapKids = (id) => Object.values(S.notes).filter((n) => primary(n.id) === id).map((n) => n.id);
+function subtree(id, out = new Set()) { out.add(id); for (const k of mapKids(id)) if (!out.has(k)) subtree(k, out); return out; }
+const depth = (id) => { let d = 0, c = primary(id); while (c != null && d < 60) { d++; c = primary(c); } return d; };
+const rootColour = (id) => { let c = id; while (primary(c) != null) c = primary(c); const roots = Object.values(S.notes).filter((n) => primary(n.id) == null && mapKids(n.id).length).map((n) => n.id).sort((a, b) => a - b); return `var(${COLOURS[Math.max(0, roots.indexOf(c)) % COLOURS.length]})`; };
+const T = (id) => S.notes[id].title;
+
+// ── map layout: each area arranges what it holds, so nothing overlaps ─────────────────────
+// A note's place on the map is which area it's in and its order there (`o`). Dragging changes
+// those; the layout does the rest, the same way every time.
+const CW = 168, CH = 56, PAD = 14, HEAD = 34, GAP = 12;
+// Narrow screens lay areas out two cards wide and one above the next, so they're readable.
+const narrow = () => map.clientWidth < 600;
+let ROWW = 3 * CW + 2 * GAP, TOPW = 820;
+let R = {}, STRIP = null;
+const byOrder = (ids) => ids.sort((a, b) => S.notes[a].o - S.notes[b].o);
+const kidsOf = (id) => byOrder(mapKids(id));
+const tops = () => byOrder(Object.values(S.notes).filter((n) => primary(n.id) == null && mapKids(n.id).length).map((n) => n.id));
+const strays = () => byOrder(Object.values(S.notes).filter((n) => primary(n.id) == null && !mapKids(n.id).length).map((n) => n.id));
+function size(id, seen) {
+  const kids = seen.has(id) ? [] : kidsOf(id);
+  if (!kids.length) return { w: CW, h: CH, items: [], area: false };
+  const sz = kids.map((k) => size(k, new Set([...seen, id]))), widest = Math.max(...sz.map((z) => z.w));
+  const f = flow(kids, sz, sz.some((z) => z.area) && !narrow() ? Math.max(ROWW, 2 * widest + GAP) : Math.max(ROWW, widest));
+  return { w: Math.max(f.w, CW + 60) + 2 * PAD, h: f.h + HEAD + 2 * PAD, items: f.items, area: true };
+}
+function flow(ids, sz, maxW) {
+  let x = 0, y = 0, rowH = 0, w = 0;
+  const items = ids.map((id, i) => {
+    const z = sz[i];
+    if (x > 0 && x + z.w > maxW) { x = 0; y += rowH + GAP; rowH = 0; }
+    const it = [id, x, y, z]; x += z.w + GAP; rowH = Math.max(rowH, z.h); w = Math.max(w, x - GAP);
+    return it;
+  });
+  return { w, h: y + rowH, items };
+}
+function put(items, ox, oy) {
+  for (const [id, x, y, z] of items) {
+    R[id] = { x: ox + x, y: oy + y, w: z.w, h: z.h, area: z.area };
+    if (z.area) put(z.items, ox + x + PAD, oy + y + HEAD + PAD);
+  }
+}
+function layout() {
+  R = {};
+  if (!V.tidy) freeLayout(); else tidyLayout();
+  const d = V.drag;
+  if (d) for (const id of subtree(d.id)) if (R[id]) R[id] = { ...R[id], x: R[id].x + d.dx, y: R[id].y + d.dy };
+  else if (!V.tidy) for (const id in R) { S.notes[id].x = R[id].x; S.notes[id].y = R[id].y; }
+}
+/** Arrange off: every note stays where it was put (x, y), and a box is drawn round what it holds. */
+function freeLayout() {
+  STRIP = null;
+  const box = (id, seen) => {
+    if (R[id]) return R[id];
+    const n = S.notes[id];
+    R[id] = { x: n.x, y: n.y, w: CW, h: CH, area: false };
+    const kids = seen.has(id) ? [] : mapKids(id);
+    if (!kids.length) return R[id];
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    for (const k of kids) { const b = box(k, new Set([...seen, id])); x1 = Math.min(x1, b.x); y1 = Math.min(y1, b.y); x2 = Math.max(x2, b.x + b.w); y2 = Math.max(y2, b.y + b.h); }
+    return (R[id] = { x: x1 - PAD, y: y1 - PAD - HEAD, w: x2 - x1 + 2 * PAD, h: y2 - y1 + 2 * PAD + HEAD, area: true });
+  };
+  for (const id in S.notes) box(+id, new Set());
+}
+/** Arrange on: each box lays out what it holds in rows, in order, so nothing overlaps. */
+function tidyLayout() {
+  ROWW = narrow() ? 2 * CW + GAP : 3 * CW + 2 * GAP; TOPW = narrow() ? 0 : 820;
+  const t = tops(), f = flow(t, t.map((id) => size(id, new Set())), TOPW);
+  put(f.items, 0, 0);
+  const st = strays(), g = flow(st, st.map(() => ({ w: CW, h: CH, area: false, items: [] })), TOPW - 2 * PAD);
+  const sy = f.h + 40;
+  STRIP = { x: 0, y: sy, w: Math.max(f.w, g.w + 2 * PAD, 3 * CW), h: Math.max(g.h, CH) + HEAD + 2 * PAD };
+  put(g.items, PAD, sy + HEAD + PAD);
+}
+/** Turn Arrange on or off. Off keeps everything where it is now; on orders each box's notes by
+ *  where they are now, reading left to right, top to bottom. */
+function setTidy(on) {
+  if (on === V.tidy) return;
+  const drag = V.drag; V.drag = null; layout(); V.drag = drag;
+  if (on) Object.keys(R).map(Number).sort((a, b) => Math.round(R[a].y / 40) - Math.round(R[b].y / 40) || R[a].x - R[b].x).forEach((id, i) => (S.notes[id].o = i));
+  else for (const id in R) { S.notes[id].x = R[id].x; S.notes[id].y = R[id].y; }
+  V.tidy = on;
+  try { localStorage.setItem("f42-arrange", on ? "on" : "off"); } catch {}
+  $("#tidyBtn").setAttribute("aria-pressed", on);
+  render();
+  toast(on ? "Arrange on: boxes arrange themselves and make room as you drag" : "Arrange off: notes and boxes stay where you put them");
+}
+// ── Tidy, as Floe does it ─────────────────────────────────────────────────────────────────
+// Floe's ⇶ Tidy (~/Developer/floe apps/web/src/features/canvas/autoLayout.ts): ELK's layered
+// layout with boxes as real containers, connected notes side by side, few crossings, and lines
+// routed in right angles round what's between. Same options as Floe. It places everything (so
+// Arrange goes off), and its routed lines are drawn until something moves.
+const FLOE = { NODE_SEP: 50, LAYER_SEP: 90 };
+const edgeKey = (e) => `${e.from}-${e.to}-${e.kind}`;
+const posSig = () => Object.values(S.notes).map((n) => `${n.id}:${Math.round(n.x)},${Math.round(n.y)}`).join("|") + "#" + S.edges.length;
+async function floeTidy(direction) {
+  if (!window.ELK) { toast("Tidy needs F42-elk.js beside this page (Floe's layout engine, elkjs)"); return; }
+  const drag = V.drag; V.drag = null; layout(); V.drag = drag;
+  const group = { "elk.algorithm": "layered", "elk.direction": direction, "elk.padding": `[top=${HEAD + PAD},left=${PAD},bottom=${PAD},right=${PAD}]`, "elk.spacing.nodeNode": String(FLOE.NODE_SEP), "elk.layered.spacing.nodeNodeBetweenLayers": String(FLOE.LAYER_SEP) };
+  const node = (id, seen = new Set()) => {
+    const kids = seen.has(id) ? [] : kidsOf(id);
+    return kids.length ? { id: "n" + id, layoutOptions: group, children: kids.map((k) => node(k, new Set([...seen, id]))) } : { id: "n" + id, width: CW, height: CH };
+  };
+  const seenKey = new Set();
+  const edges = S.edges.filter((e) => V.kindsShown.has(e.kind) && !(e.kind === "part-of" && primary(e.from) === e.to))
+    .filter((e) => !subtree(e.from).has(e.to) && !subtree(e.to).has(e.from)) // not between a box and what's in it
+    .filter((e) => !seenKey.has(edgeKey(e)) && seenKey.add(edgeKey(e)))
+    .map((e) => ({ id: edgeKey(e), sources: ["n" + e.from], targets: ["n" + e.to] }));
+  const graph = {
+    id: "root",
+    layoutOptions: { ...group, "elk.padding": "[top=0,left=0,bottom=0,right=0]", "elk.edgeRouting": "ORTHOGONAL", "elk.hierarchyHandling": "INCLUDE_CHILDREN", "elk.json.edgeCoords": "ROOT",
+      "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP", "elk.layered.nodePlacement.strategy": "BRANDES_KOEPF", "elk.spacing.edgeNode": "28", "elk.spacing.edgeEdge": "20" },
+    children: [...tops(), ...strays()].map((id) => node(id)),
+    edges,
+  };
+  let out;
+  try { out = await new ELK().layout(graph); } catch (err) { toast(`Tidy didn't work: ${err.message ?? err}`); return; }
+  save();
+  (function walk(n, ox, oy) { for (const c of n.children ?? []) { const x = ox + (c.x ?? 0), y = oy + (c.y ?? 0); const id = +c.id.slice(1); S.notes[id].x = x; S.notes[id].y = y; walk(c, x, y); } })(out, 0, 0);
+  const routes = {};
+  (function collect(n) { for (const e of n.edges ?? []) { const sec = e.sections?.[0]; if (sec) routes[e.id] = [sec.startPoint, ...(sec.bendPoints ?? []), sec.endPoint].map((p) => [p.x, p.y]); } for (const c of n.children ?? []) collect(c); })(out);
+  V.tidy = false; $("#tidyBtn").setAttribute("aria-pressed", false);
+  try { localStorage.setItem("f42-arrange", "off"); } catch {}
+  layout(); V.routes = { sig: posSig(), routes };
+  render(); zoomTo(Object.keys(R).map(Number), 1);
+  toast(`Tidied ${direction === "RIGHT" ? "left to right" : "top to bottom"}, as Floe does`, true);
+}
+function tidyMenu(btn) {
+  closeMenus();
+  const r = btn.getBoundingClientRect(), m = document.createElement("div"); m.className = "menu";
+  m.style.right = innerWidth - r.right + "px"; m.style.bottom = innerHeight - r.top + 6 + "px";
+  m.innerHTML = `<div class="mh">Tidy, as Floe does (ELK)</div><button data-dir="RIGHT">⇶ Left to right<small>Connected notes side by side; lines in right angles</small></button><button data-dir="DOWN">⇊ Top to bottom<small>The same, in rows</small></button>`;
+  m.addEventListener("click", (e) => { const b = e.target.closest("[data-dir]"); if (b) { closeMenus(); floeTidy(b.dataset.dir); } e.stopPropagation(); });
+  document.body.appendChild(m);
+}
+
+/** Arrange off: a drop leaves things where they were dropped, and changes what they're in. */
+function dropFree(id, target, also, dx, dy) {
+  if (target === id || (target != null && subtree(id).has(target))) { toast(`Can't put “${T(id)}” inside itself`); return; }
+  const before = JSON.stringify(S), cur = primary(id);
+  if (also) { if (!apply(id, target, true)) return; }
+  else {
+    for (const i of subtree(id)) { S.notes[i].x += dx; S.notes[i].y += dy; }
+    if (target != null && target !== "strip" && !R[target].area) {
+      // into a single note: tuck it just inside, so the note becomes a box round it
+      const r = R[id], tx = R[target].x + PAD, ty = R[target].y + HEAD + PAD;
+      for (const i of subtree(id)) { S.notes[i].x += tx - r.x; S.notes[i].y += ty - r.y; }
+    }
+    const to = target === "strip" ? null : target;
+    if (to !== cur) { S.edges = S.edges.filter((e) => !(e.from === id && e.kind === "part-of")); if (to != null) S.edges.push({ from: id, to, kind: "part-of" }); }
+  }
+  if (JSON.stringify(S) === before) return;
+  V.undo.push(before);
+  const to = target === "strip" ? null : target;
+  toast(also ? `“${T(id)}” is now in ${T(to)} too` : to === cur ? `Moved “${T(id)}”` : to != null ? `Moved “${T(id)}” into ${T(to)}` : `Took “${T(id)}” out of ${T(cur)}`, true);
+}
+const inside = (r, x, y) => x >= r.x && y >= r.y && x <= r.x + r.w && y <= r.y + r.h;
+/** The area a drop at this point goes into: the deepest area under it, or "strip" (not in
+ *  anything), or null (the open map, where a note that holds others stands on its own). */
+function dropTarget(wx, wy, skip = new Set()) {
+  let best = null, bd = -1;
+  for (const id in R) {
+    const i = +id;
+    if (skip.has(i) || !R[i].area || !inside(R[i], wx, wy)) continue;
+    if (depth(i) > bd) { bd = depth(i); best = i; }
+  }
+  if (best == null && STRIP && inside(STRIP, wx, wy)) return "strip";
+  return best;
+}
+/** Any note under the point, for linking. */
+function noteAt(wx, wy, skip) {
+  let best = null, bd = -1;
+  for (const id in R) { const i = +id; if (i === skip || !inside(R[i], wx, wy)) continue; const dd = depth(i) * 2 + (R[i].area ? 0 : 1); if (dd > bd) { bd = dd; best = i; } }
+  return best;
+}
+/** While dragging: hold over a note for half a second to put it inside that note (as Finder
+ *  opens a folder); otherwise it goes into the area under the pointer. */
+let dwellTimer = null;
+function aimAt(wx, wy, dragged, cx, cy, alt) {
+  // A note goes straight into the box under it; a box changes its order where it is. Either one
+  // goes *inside* another note when held over it for half a second.
+  const skip = subtree(dragged), isBox = mapKids(dragged).length > 0, cur = primary(dragged);
+  let c = null, bd = -1;
+  for (const id in R) {
+    const i = +id;
+    if (skip.has(i) || !inside(R[i], wx, wy) || (!isBox && R[i].area) || i === cur) continue;
+    const dd = depth(i) * 2 + (R[i].area ? 0 : 1);
+    if (dd > bd) { bd = dd; c = i; }
+  }
+  if (c !== V.hover) {
+    V.hover = c; V.dwell = false; clearTimeout(dwellTimer);
+    if (c != null) dwellTimer = setTimeout(() => { V.dwell = true; aimAt(wx, wy, dragged, cx, cy, alt); }, 500);
+  }
+  if (V.dwell && c != null) V.drop = c;
+  else if (isBox) V.drop = cur != null && inside(R[cur], wx, wy) ? cur : null;
+  else V.drop = dropTarget(wx, wy, skip);
+  const tip = $("#tip");
+  let text = "";
+  if (V.drop === "strip" || V.drop == null) text = cur != null ? (alt ? "" : `Take out of ${T(cur)}`) : isBox ? "Move here · hold over a box to put it inside" : "Move here";
+  else if (V.drop === cur && !alt && !V.tidy) text = "Move here";
+  else if (V.drop === cur && !alt) text = isBox ? "Move here · hold over a box to put it inside" : "Change the order";
+  else text = `${alt ? "Also put in" : "Put in"} ${T(V.drop)}`;
+  tip.hidden = !text; tip.textContent = text; tip.style.left = cx + 14 + "px"; tip.style.top = cy + 14 + "px";
+  V.preview = V.tidy ? preview(dragged, V.drop, alt, { x: wx, y: wy }) : null;
+  renderMap();
+}
+function endAim() { V.preview = null; clearTimeout(dwellTimer); V.hover = null; V.dwell = false; $("#tip").hidden = true; }
+/** Order a note among what it now sits beside, by where it was dropped (reading order). */
+function orderAt(id, wx, wy) {
+  const t = primary(id), sibs = (t != null ? kidsOf(t) : mapKids(id).length ? tops() : strays()).filter((k) => k !== id);
+  const before = sibs.filter((k) => { const r = R[k]; return r && (r.y + r.h < wy || (r.y <= wy && r.x + r.w / 2 < wx)); }).length;
+  const list = [...sibs.slice(0, before), id, ...sibs.slice(before)];
+  list.forEach((k, i) => (S.notes[k].o = i));
+}
+const last = (id) => (S.notes[id].o = 1e6 + S.nextId);
+
+// ── changes (each one can be undone) ──────────────────────────────────────────────────────
+function save() { V.undo.push(JSON.stringify(S)); if (V.undo.length > 50) V.undo.shift(); }
+function undo() { const s = V.undo.pop(); if (!s) return; S = JSON.parse(s); V.undid = true; if (V.open != null && !S.notes[V.open]) V.open = null; V.sel = new Set([...V.sel].filter((i) => S.notes[i])); toast("Undone"); render(); }
+/** Put a note in another (instead of where it was), or in it too (⌥). target null: in nothing. */
+/** The change itself, with no undo point or message: a drag previews it with this. */
+function apply(id, target, also, at) {
+  if (target === id || (target != null && subtree(id).has(target))) return false;
+  if (also) {
+    if (target == null || partParents(id).includes(target)) return false;
+    S.edges.push({ from: id, to: target, kind: "part-of" });
+    return true;
+  }
+  if (target !== primary(id) || target == null) {
+    S.edges = S.edges.filter((e) => !(e.from === id && e.kind === "part-of"));
+    if (target != null) S.edges.push({ from: id, to: target, kind: "part-of" });
+  }
+  if (at) orderAt(id, at.x, at.y); else last(id);
+  return true;
+}
+/** Put a note in another (instead of where it was), or in it too (⌥). target null: in nothing. */
+function place(id, target, also, at) {
+  if (target === id || (target != null && subtree(id).has(target))) { toast(`Can't put “${T(id)}” inside itself`); return false; }
+  const cur = primary(id), before = JSON.stringify(S);
+  if (!apply(id, target, also, at)) return false;
+  if (JSON.stringify(S) === before) return true;
+  V.undo.push(before);
+  if (also) toast(`“${T(id)}” is now in ${T(target)} too`, true);
+  else if (target === cur) toast(`Moved “${T(id)}”`, true);
+  else toast(target != null ? `Moved “${T(id)}” into ${T(target)}` : `Took “${T(id)}” out of ${cur != null ? T(cur) : "its place"}`, true);
+  return true;
+}
+/** Where everything would be if the drag were dropped now (the dragged note itself stays under
+ *  the pointer). */
+function preview(id, target, also, at) {
+  const keep = JSON.stringify(S), drag = V.drag;
+  V.drag = null; layout(); // order by where things are now, not mid-drag
+  apply(id, target === "strip" ? null : target, also, at);
+  layout(); const P = { R, STRIP };
+  S = JSON.parse(keep); V.drag = drag; layout();
+  return P;
+}
+function unplace(id, to, kind) { save(); S.edges = S.edges.filter((e) => !(e.from === id && e.to === to && e.kind === kind)); toast(`“${T(id)}” no longer ${KINDS[kind].label.toLowerCase()} ${T(to)}`, true); render(); }
+function link(from, to, kind) {
+  if (S.edges.some((e) => e.from === from && e.to === to && e.kind === kind)) return;
+  save(); S.edges.push({ from, to, kind });
+  toast(`“${T(from)}” ${KINDS[kind].label.toLowerCase()} ${T(to)}`, true); render();
+}
+function newNote(title, under) {
+  save();
+  const id = S.nextId++;
+  S.notes[id] = { id, title, icon: "📄", type: "Note", o: 0 }; last(id);
+  if (under != null) S.edges.push({ from: id, to: under, kind: "part-of" });
+  if (!V.tidy) {
+    const r = under != null ? R[under] : null, c = toWorld(map.clientWidth / 2, map.clientHeight / 2);
+    Object.assign(S.notes[id], r ? (r.area ? { x: r.x + PAD, y: r.y + r.h - PAD + GAP } : { x: r.x + PAD, y: r.y + HEAD + PAD }) : { x: c.x - CW / 2, y: c.y - CH / 2 });
+  }
+  V.open = id; toast(`Made “${title}”${under != null ? ` in ${T(under)}` : ""}`, true); render();
+}
+function group(ids, name) {
+  save();
+  const id = S.nextId++;
+  const parents = ids.map(primary), common = parents.every((p) => p === parents[0]) ? parents[0] : null;
+  S.notes[id] = { id, title: name, icon: "📁", type: "Hub", o: Math.min(...ids.map((i) => S.notes[i].o)) };
+  for (const i of ids) { S.edges = S.edges.filter((e) => !(e.from === i && e.kind === "part-of")); S.edges.push({ from: i, to: id, kind: "part-of" }); }
+  if (common != null) S.edges.push({ from: id, to: common, kind: "part-of" });
+  V.sel.clear(); V.open = id;
+  for (const i of ids) for (const p of pathsTo(i)) V.expanded.add(p.slice(0, -1).join("/"));
+  toast(`Grouped ${ids.length} notes into “${name}”`, true); render();
+}
+
+// ── rendering ─────────────────────────────────────────────────────────────────────────────
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+function render() { layout(); renderMap(); renderTree(); renderPanel(); renderSelbar(); renderTasks(); }
+
+function renderMap() {
+  const world = $("#world"), svg = $("#lines");
+  world.style.transform = `translate(${V.tx}px, ${V.ty}px) scale(${V.k})`;
+  // Elements are kept between drawings (by note), so a move slides rather than jumps.
+  const old = new Map([...world.querySelectorAll(".area, .card")].map((e) => [e.dataset.key, e]));
+  const P = V.preview, ST = P ? P.STRIP : STRIP;
+  let st = world.querySelector(".strip");
+  if (ST) {
+    if (!st) { st = document.createElement("div"); st.innerHTML = `<div class="head">Not in anything yet <span class="cnt">drag them into an area, or ⇧-click and group</span></div>`; world.appendChild(st); }
+    st.className = "strip" + (V.drop === "strip" ? " drop" : "");
+    Object.assign(st.style, { left: ST.x + "px", top: ST.y + "px", width: ST.w + "px", height: ST.h + "px" });
+  } else st?.remove();
+  const moving = V.drag ? subtree(V.drag.id) : new Set();
+  const ids = Object.keys(R).map(Number).sort((a, b) => moving.has(a) - moving.has(b) || depth(a) - depth(b) || (R[a].area ? -1 : 1));
+  for (const id of ids) {
+    const r = moving.has(id) || !P ? R[id] : P.R[id] ?? R[id], n = S.notes[id];
+    const key = id + (r.area ? "a" : "c"), el = old.get(key) ?? document.createElement("div");
+    old.delete(key);
+    el.dataset.id = id; el.dataset.key = key; el.removeAttribute("class"); el.removeAttribute("style");
+    el.style.left = r.x + "px"; el.style.top = r.y + "px";
+    const others = partParents(id).filter((p) => p !== primary(id));
+    if (r.area) {
+      el.className = "area"; el.style.width = r.w + "px"; el.style.height = r.h + "px"; el.style.setProperty("--c", rootColour(id));
+      el.innerHTML = `<div class="head" data-id="${id}"><span>${n.icon}</span><span>${esc(n.title)}</span><span class="cnt">${mapKids(id).length}</span><span class="handle" data-handle="${id}" title="Drag to link"></span></div>`;
+      if (V.open === id) el.classList.add("sel");
+    } else {
+      el.className = "card";
+      el.innerHTML = `<div class="ti">${n.icon} ${esc(n.title)}</div><div class="ty">${esc(n.type)}${primary(id) == null && !loose(id) ? "" : ""}</div><span class="handle" data-handle="${id}" title="Drag to link"></span>${others.length ? `<span class="multi-badge" title="Also in ${others.map(T).join(", ")}">+${others.length}</span>` : ""}`;
+      if (V.open === id) el.classList.add("sel");
+      if (V.sel.has(id)) el.classList.add("multi");
+    }
+    if (moving.has(id) && id === V.drag.id) el.classList.add("ghost");
+    if (V.drop === id) el.classList.add("drop");
+    if (moving.has(id)) el.classList.add("lifted");
+    world.appendChild(el);
+  }
+  for (const e of old.values()) e.remove();
+  // lines: a second place and other relationships, edge to edge, in the chosen shape
+  let s = `<defs>${markerDefs()}</defs>`;
+  const tidied = !V.tidy && !V.drag && V.routes && V.routes.sig === posSig() ? V.routes.routes : null;
+  // a box joins at its title bar, a note at its card
+  const rectOf = (id) => { const r = (!moving.has(id) && P?.R[id]) || R[id]; return r.area ? { x: r.x, y: r.y, w: r.w, h: HEAD } : r; };
+  for (const e of S.edges) {
+    if (!V.kindsShown.has(e.kind) || (e.kind === "part-of" && primary(e.from) === e.to)) continue;
+    if (!R[e.from] || !R[e.to]) continue;
+    const { line } = KINDS[e.kind], sel = V.open === e.from || V.open === e.to;
+    const routed = tidied?.[edgeKey(e)];
+    const { d, mx, my } = routed ? { d: rounded(routed, 8), mx: routed[Math.floor(routed.length / 2)][0], my: routed[Math.floor(routed.length / 2)][1] } : route(rectOf(e.from), rectOf(e.to), V.shape);
+    const c = `var(${line.colour})`;
+    s += `<g class="ln${sel ? " on" : ""}"><title>${esc(T(e.from))} ${KINDS[e.kind].label.toLowerCase()} ${esc(T(e.to))}</title>
+      <path d="${d}" class="hitline"/>
+      <path d="${d}" fill="none" stroke="${c}" stroke-width="${sel ? 2.25 : 1.5}" stroke-dasharray="${line.dash}" stroke-linecap="round" stroke-linejoin="round" ${line.start ? `marker-start="url(#m-${e.kind}-start)"` : ""} marker-end="url(#m-${e.kind}-end)"/>
+      <g class="lbl"><rect x="${mx - 38}" y="${my - 9}" width="76" height="18" rx="9" fill="var(--bg)" stroke="${c}"/><text x="${mx}" y="${my + 4}" font-size="11" fill="${c}" text-anchor="middle">${KINDS[e.kind].label}</text></g></g>`;
+  }
+  if (V.link) { const r = rectOf(V.link.from); s += `<path d="M${r.x + r.w} ${r.y + r.h / 2} L${V.link.x} ${V.link.y}" stroke="var(--accent)" stroke-width="2" fill="none" stroke-dasharray="4 3"/>`; }
+  svg.innerHTML = s;
+}
+
+function pathsTo(id, seen = new Set()) {
+  const ps = nestParents(id).map((e) => e.to).filter((p) => !seen.has(p));
+  if (!ps.length) return [[id]];
+  return ps.flatMap((p) => pathsTo(p, new Set([...seen, id])).map((path) => [...path, id]));
+}
+function renderTree() {
+  const lens = $("#lenses"), tree = $("#tree");
+  const looseIds = Object.values(S.notes).filter((n) => loose(n.id)).map((n) => n.id);
+  const L = [["places", "Places"], ["types", "Types"], ["inbox", "Not placed", looseIds.length], ["daily", "Daily notes"]];
+  lens.innerHTML = L.map(([k, t, n]) => `<button class="lens ${V.lens === k ? "on" : ""}" data-lens="${k}" role="tab" aria-selected="${V.lens === k}">${t}${n ? `<span class="n">${n}</span>` : ""}</button>`).join("");
+  let h = "";
+  const row = (id, pad, key, opts = {}) => {
+    const n = S.notes[id], also = opts.parent != null ? partParents(id).filter((p) => p !== opts.parent) : [];
+    return `<div class="row ${V.open === id ? "sel" : ""}" role="treeitem" tabindex="0" draggable="true" data-id="${id}" data-key="${key}" style="padding-left:${6 + pad * 14}px" ${opts.kids ? `aria-expanded="${V.expanded.has(key)}"` : ""}>
+      <span class="tw" data-tw="${key}">${opts.kids ? (V.expanded.has(key) ? "▾" : "▸") : opts.cycle ? "↺" : ""}</span><span>${n.icon}</span><span class="t">${esc(n.title)}</span>${also.length ? `<span class="also">also in ${esc(also.map(T).join(", "))}</span>` : ""}</div>`;
+  };
+  if (V.lens === "places") {
+    const walk = (id, pad, key, seen) => {
+      const kids = S.edges.filter((e) => e.to === id && nests(e));
+      const cycle = seen.has(id);
+      h += row(id, pad, key, { kids: kids.length && !cycle, parent: seen.size ? [...seen].pop() : null, cycle });
+      if (cycle || !V.expanded.has(key)) return;
+      const groups = Object.keys(KINDS).filter((k) => kids.some((e) => e.kind === k));
+      for (const g of groups) {
+        if (groups.length > 1 || g !== "part-of") h += `<div class="grp" style="padding-left:${26 + pad * 14}px">${KINDS[g].group}</div>`;
+        for (const e of kids.filter((e) => e.kind === g).sort((a, b) => (g === "part-of" ? S.notes[a.from].o - S.notes[b.from].o : 0) || T(a.from).localeCompare(T(b.from)))) walk(e.from, pad + 1, key + "/" + e.from, new Set([...seen, id]));
+      }
+    };
+    const roots = Object.values(S.notes).filter((n) => !nestParents(n.id).length && !loose(n.id)).sort((a, b) => a.o - b.o);
+    for (const r of roots) walk(r.id, 0, String(r.id), new Set());
+    h += `<div class="hint">Drag a note onto another to put it there. Hold ⌥ to put it in a second place too.</div>`;
+  } else if (V.lens === "types") {
+    const types = [...new Set(Object.values(S.notes).map((n) => n.type))].sort();
+    for (const t of types) { h += `<div class="grp">${esc(t)}</div>`; for (const n of Object.values(S.notes).filter((n) => n.type === t)) h += row(n.id, 0, "t" + n.id); }
+  } else if (V.lens === "inbox") {
+    h += `<div class="hint">These aren't in anything yet. Drag one onto the map or onto a note, or ⇧-click several on the map and group them.</div>`;
+    for (const id of looseIds) h += row(id, 0, "i" + id);
+    if (!looseIds.length) h += `<div class="hint">Everything has a place. 🎉</div>`;
+  } else h += `<div class="hint">Daily notes, by date (unchanged from today).</div>`;
+  tree.innerHTML = h;
+}
+
+function renderPanel() {
+  const p = $("#panel"), id = V.open;
+  $("#app").classList.toggle("no-panel", id == null);
+  if (id == null || !S.notes[id]) { p.hidden = true; return; }
+  p.hidden = false;
+  const n = S.notes[id];
+  const under = nestParents(id), lines = S.edges.filter((e) => !nests(e) && (e.from === id || e.to === id));
+  const holds = S.edges.filter((e) => e.to === id && nests(e));
+  let h = `<h2><span>${n.icon}</span><span>${esc(n.title)}</span><button class="x" data-close aria-label="Close">×</button></h2>
+    <div><div class="label">In</div><div class="chips">${under.map((e) => `<span class="chip">${e.kind !== "part-of" ? `<span class="k">${KINDS[e.kind].label.toLowerCase()}</span>` : ""}${esc(T(e.to))}<button data-unplace="${e.to}" data-kind="${e.kind}" aria-label="Take out of ${esc(T(e.to))}">×</button></span>`).join("")}<button class="chip add" data-picker>+ Put in…</button></div></div>`;
+  if (V.picker) {
+    const q = V.filter.toLowerCase(), opts = Object.values(S.notes).filter((o) => o.id !== id && !subtree(id).has(o.id) && !partParents(id).includes(o.id) && o.title.toLowerCase().includes(q)).slice(0, 7);
+    h += `<div class="picker"><input id="pick" placeholder="Put “${esc(n.title)}” in…" value="${esc(V.filter)}" autocomplete="off">${opts.map((o) => `<div class="opt" data-pick="${o.id}">${o.icon} ${esc(o.title)}</div>`).join("")}</div>`;
+  }
+  if (holds.length) h += `<div><div class="label">Holds</div><div class="list">${holds.map((e) => `<a data-go="${e.from}">${S.notes[e.from].icon} ${esc(T(e.from))}${e.kind !== "part-of" ? ` <small style="color:var(--muted)">· ${KINDS[e.kind].back.toLowerCase()}</small>` : ""}</a>`).join("")}</div><button class="btn" data-new-under style="margin-top:8px">+ New note in ${esc(n.title)}</button></div>`;
+  else h += `<div><button class="btn" data-new-under>+ New note in ${esc(n.title)}</button></div>`;
+  if (lines.length) h += `<div><div class="label">Related</div><div class="list">${lines.map((e) => { const o = e.from === id ? e.to : e.from; return `<a data-go="${o}">${S.notes[o].icon} ${esc(T(o))}</a>`; }).join("")}</div></div>`;
+  h += `<div class="body"><p>${esc(BODY[n.title] ?? "Write here…")}</p></div>`;
+  p.innerHTML = h;
+  if (V.picker) { const i = $("#pick"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }
+}
+function renderSelbar() {
+  const b = $("#selbar");
+  if (V.sel.size < 2) { b.hidden = true; return; }
+  b.hidden = false;
+  b.innerHTML = `${V.sel.size} notes picked <button class="btn primary" data-group>Group into a new note ⌘G</button><button class="btn" data-clear>Clear</button>`;
+}
+
+// ── tasks to try ──────────────────────────────────────────────────────────────────────────
+const has = (f, t, k = "part-of") => S.edges.some((e) => e.from === f && e.to === t && e.kind === k);
+const TASKS = [
+  ["Find “Raised beds” and open it", () => V.seen7],
+  ["Move “Budget 2027” into Garden", () => has(5, 6)],
+  ["Put “Tiles” in Howdens too, keeping it in the kitchen (hold ⌥ as you drop)", () => has(4, 10) && has(4, 2)],
+  ["Group the three notes that aren't placed into “House jobs”", () => Object.values(S.notes).some((n) => [15, 16, 17].every((i) => has(i, n.id)))],
+  ["Link Alex to Garden (drag from ○)", () => S.edges.some((e) => (e.from === 13 && e.to === 6) || (e.from === 6 && e.to === 13))],
+  ["Make a new note inside Garden", () => Object.values(S.notes).some((n) => n.id >= 100 && has(n.id, 6))],
+  ["Undo something", () => V.undid],
+];
+function renderTasks() {
+  const t = $("#tasks"), done = TASKS.map(([, f]) => !!f());
+  t.innerHTML = `<h4>Try these <button data-min aria-label="Hide the tasks">${t.classList.contains("min") ? "▸" : "▾"}</button></h4><ol>${TASKS.map(([s], i) => `<li class="${done[i] ? "done" : ""}"><span class="ck">${done[i] ? "✓" : i + 1}</span><span>${s}</span></li>`).join("")}</ol>${done.every(Boolean) ? `<div class="all">All done. How did it feel?</div>` : ""}`;
+}
+
+// ── toast, menus, dialogs ─────────────────────────────────────────────────────────────────
+let toastTimer;
+function toast(msg, canUndo) {
+  $("#layer").querySelector(".toast")?.remove();
+  const t = document.createElement("div"); t.className = "toast"; t.setAttribute("role", "status");
+  t.innerHTML = `<span>${esc(msg)}</span>${canUndo ? `<button data-undo>Undo</button>` : ""}`;
+  $("#layer").appendChild(t); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.remove(), 5000);
+}
+function closeMenus() { document.querySelectorAll(".menu, .scrim").forEach((m) => m.remove()); }
+function linkMenu(from, to, x, y) {
+  closeMenus();
+  const m = document.createElement("div"); m.className = "menu"; m.style.left = Math.min(x, innerWidth - 240) + "px"; m.style.top = Math.min(y, innerHeight - 220) + "px";
+  m.innerHTML = `<div class="mh">“${esc(T(from))}” …</div>` + Object.entries(KINDS).map(([k, v]) => `<button data-kind="${k}">${sample(k)} ${v.label} ${esc(T(to))}<small>${k === "part-of" ? `Shows inside ${esc(T(to))}` : v.nests ? `Listed under ${esc(T(to))}, drawn as a line` : "A line between them"}</small></button>`).join("");
+  m.onclick = (e) => { const b = e.target.closest("button"); if (!b) return; closeMenus(); if (b.dataset.kind === "part-of") { if (place(from, to, partParents(from).length > 0)) render(); } else link(from, to, b.dataset.kind); };
+  document.body.appendChild(m);
+  m.querySelector("button").focus();
+}
+function dialog(html, onOk) {
+  closeMenus();
+  const s = document.createElement("div"); s.className = "scrim"; s.innerHTML = `<div class="dialog" role="dialog" aria-modal="true">${html}</div>`;
+  s.onclick = (e) => { if (e.target === s || e.target.closest("[data-cancel]")) s.remove(); if (e.target.closest("[data-ok]")) { onOk(s); s.remove(); } };
+  s.onkeydown = (e) => { if (e.key === "Escape") s.remove(); if (e.key === "Enter" && e.target.tagName === "INPUT") { onOk(s); s.remove(); } };
+  document.body.appendChild(s); (s.querySelector("input") ?? s.querySelector("[data-ok]"))?.focus();
+}
+function askGroup() {
+  const ids = [...V.sel]; if (ids.length < 2) return;
+  dialog(`<h3>Group ${ids.length} notes</h3><p>Makes a new note that holds them (each becomes part of it). It's an area on the map and a place in the explorer.</p><input class="name" value="New group" aria-label="Name"><div class="acts"><button class="btn" data-cancel>Cancel</button><button class="btn primary" data-ok>Group</button></div>`,
+    (s) => group(ids, s.querySelector("input").value.trim() || "New group"));
+  document.querySelector(".dialog input").select();
+}
+function askNew(under) {
+  dialog(`<h3>New note${under != null ? ` in ${esc(T(under))}` : ""}</h3><p>${under != null ? `It'll be part of ${esc(T(under))}.` : "It starts with no place. Put it somewhere whenever you like."}</p><input class="name" placeholder="Title" aria-label="Title"><div class="acts"><button class="btn" data-cancel>Cancel</button><button class="btn primary" data-ok>Make it</button></div>`,
+    (s) => { const t = s.querySelector("input").value.trim(); if (t) newNote(t, under); });
+}
+function askConvert() {
+  dialog(`<h3>Use relationships instead of folders</h3><p>Each folder becomes a note that holds what was in it. Nothing is deleted, links keep working, and you can undo this for 30 days.</p>
+  <div class="cols"><div><div class="label">Now: folders</div><pre>📁 House/
+   📁 Kitchen/
+      Overview.md
+      Kitchen plan.md
+      Tiles.md
+   📁 Garden/
+      Overview.md
+      Raised beds.md
+📁 Suppliers/
+   Howdens.md</pre></div><div><div class="label">After: notes that hold others</div><pre>🏠 House
+   🍳 Kitchen         ← was Kitchen/
+      Overview (Kitchen)
+      Kitchen plan
+      Tiles
+   🌱 Garden          ← was Garden/
+      Overview (Garden)
+      Raised beds
+🏢 Suppliers
+   Howdens</pre></div></div>
+  <div class="renames"><div class="label">2 notes get new names, so every title is different (links to them are fixed)</div><ul><li>Kitchen/Overview → <b>Overview (Kitchen)</b></li><li>Garden/Overview → <b>Overview (Garden)</b></li></ul></div>
+  <p>Kept as they are: Types, Relationships, Daily notes, the Inbox and attached files. Exports still come out in folders, rebuilt from what each note is part of.</p>
+  <div class="acts"><button class="btn" data-cancel>Not now</button><button class="btn primary" data-ok>Convert 4 folders</button></div>`,
+    () => toast("Converted 4 folders into notes. Undo from Settings → Collection for 30 days", true));
+}
+
+// ── lines between notes ───────────────────────────────────────────────────────────────────
+/** A line from one rectangle's edge to another's: across when they sit side by side, else up
+ *  or down; curved, straight, or in right angles with rounded corners. */
+function route(a, b, shape) {
+  // join on the sides with the wider gap between them
+  const gx = Math.max(b.x - (a.x + a.w), a.x - (b.x + b.w)), gy = Math.max(b.y - (a.y + a.h), a.y - (b.y + b.h));
+  const across = gx > gy;
+  let p, q;
+  if (across) { const r = a.x < b.x; p = [r ? a.x + a.w : a.x, a.y + a.h / 2]; q = [r ? b.x : b.x + b.w, b.y + b.h / 2]; }
+  else { const dn = a.y < b.y; p = [a.x + a.w / 2, dn ? a.y + a.h : a.y]; q = [b.x + b.w / 2, dn ? b.y : b.y + b.h]; }
+  const [x1, y1] = p, [x2, y2] = q;
+  if (shape === "straight") return { d: `M${x1} ${y1}L${x2} ${y2}`, mx: (x1 + x2) / 2, my: (y1 + y2) / 2 };
+  if (shape === "elbow") {
+    const pts = across ? [p, [(x1 + x2) / 2, y1], [(x1 + x2) / 2, y2], q] : [p, [x1, (y1 + y2) / 2], [x2, (y1 + y2) / 2], q];
+    return { d: rounded(pts, 10), mx: (x1 + x2) / 2, my: (y1 + y2) / 2 };
+  }
+  const k = across ? Math.max(30, Math.abs(x2 - x1) / 2) * Math.sign(x2 - x1) : Math.max(30, Math.abs(y2 - y1) / 2) * Math.sign(y2 - y1 || 1);
+  const c1 = across ? [x1 + k, y1] : [x1, y1 + k], c2 = across ? [x2 - k, y2] : [x2, y2 - k];
+  return { d: `M${x1} ${y1}C${c1} ${c2} ${x2} ${y2}`, mx: (x1 + x2) / 2, my: (y1 + y2) / 2 };
+}
+function rounded(pts, r) {
+  let d = `M${pts[0][0]} ${pts[0][1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [px, py] = pts[i - 1], [x, y] = pts[i], [nx, ny] = pts[i + 1];
+    const l1 = Math.hypot(x - px, y - py), l2 = Math.hypot(nx - x, ny - y), rr = Math.min(r, l1 / 2, l2 / 2);
+    if (rr < 0.5) { d += `L${x} ${y}`; continue; }
+    d += `L${x - ((x - px) / l1) * rr} ${y - ((y - py) / l1) * rr}Q${x} ${y} ${x + ((nx - x) / l2) * rr} ${y + ((ny - y) / l2) * rr}`;
+  }
+  const [lx, ly] = pts[pts.length - 1];
+  return d + `L${lx} ${ly}`;
+}
+function linesMenu(btn) {
+  closeMenus();
+  const r = btn.getBoundingClientRect(), m = document.createElement("div"); m.className = "menu lines-menu";
+  m.style.right = innerWidth - r.right + "px"; m.style.bottom = innerHeight - r.top + 6 + "px";
+  m.innerHTML = `<div class="mh">Shape</div><div class="seg">${Object.entries(SHAPES).map(([k, t]) => `<button data-shape="${k}" aria-pressed="${V.shape === k}">${shapeIcon(k)}${t}</button>`).join("")}</div>
+    <div class="mh">Show</div>${Object.entries(KINDS).map(([k, v]) => `<label class="kind"><input type="checkbox" data-kind-shown="${k}" ${V.kindsShown.has(k) ? "checked" : ""}>${sample(k)}<span>${k === "part-of" ? "Also in" : v.label}<small>${v.line.says}</small></span></label>`).join("")}`;
+  m.addEventListener("click", (e) => { const b = e.target.closest("[data-shape]"); if (b) { V.shape = b.dataset.shape; keepLines(); linesMenu(btn); renderMap(); } e.stopPropagation(); });
+  m.addEventListener("change", (e) => { const k = e.target.dataset.kindShown; e.target.checked ? V.kindsShown.add(k) : V.kindsShown.delete(k); keepLines(); renderMap(); });
+  document.body.appendChild(m);
+}
+const shapeIcon = (k) => `<svg width="22" height="14" viewBox="0 0 22 14" aria-hidden="true"><path d="${k === "curved" ? "M2 12C11 12 11 2 20 2" : k === "straight" ? "M2 12L20 2" : "M2 12H11V2H20"}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+function keepLines() { try { localStorage.setItem("f42-lines", JSON.stringify({ shape: V.shape, shown: [...V.kindsShown] })); } catch {} }
+
+// ── map interaction ───────────────────────────────────────────────────────────────────────
+const toWorld = (cx, cy) => ({ x: (cx - V.tx) / V.k, y: (cy - V.ty) / V.k });
+function mapXY(e) { const r = map.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+let press = null;
+map.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0 || e.target.closest(".ctl, .legend, .selbar")) return; // the map's own buttons
+  closeMenus();
+  const [cx, cy] = mapXY(e), handle = e.target.closest("[data-handle]"), el = e.target.closest(".card, .area");
+  map.setPointerCapture(e.pointerId);
+  if (handle) { const w = toWorld(cx, cy); V.link = { from: +handle.dataset.handle, x: w.x, y: w.y }; press = { mode: "link" }; return; }
+  if (el) {
+    press = { mode: "maybe-drag", id: +el.dataset.id, cx, cy, shift: e.shiftKey, tx: V.tx, ty: V.ty };
+    // a finger has to hold a moment to lift a note or box, so swiping still moves the map
+    if (e.pointerType === "touch") { press.touch = true; press.timer = setTimeout(() => { if (press?.mode === "maybe-drag") { press.held = true; el.classList.add("lifted"); navigator.vibrate?.(10); } }, 350); }
+    return;
+  }
+  press = { mode: "pan", cx, cy, tx: V.tx, ty: V.ty, moved: false };
+});
+map.addEventListener("pointermove", (e) => {
+  if (!press) return;
+  const [cx, cy] = mapXY(e);
+  if (press.mode === "pan") { if (Math.abs(cx - press.cx) + Math.abs(cy - press.cy) > 3) { press.moved = true; map.classList.add("panning"); } V.tx = press.tx + cx - press.cx; V.ty = press.ty + cy - press.cy; renderMap(); return; }
+  if (press.mode === "link") { const w = toWorld(cx, cy); V.link.x = w.x; V.link.y = w.y; V.drop = noteAt(w.x, w.y, V.link.from); renderMap(); return; }
+  if (press.mode === "maybe-drag" && Math.abs(cx - press.cx) + Math.abs(cy - press.cy) > 4) {
+    clearTimeout(press.timer);
+    if (press.touch && !press.held) { press = { mode: "pan", cx: press.cx, cy: press.cy, tx: press.tx, ty: press.ty, moved: true }; return; }
+    press.mode = "drag"; V.drag = { id: press.id, dx: 0, dy: 0 };
+  }
+  if (press.mode === "drag") {
+    V.drag.dx = (cx - press.cx) / V.k; V.drag.dy = (cy - press.cy) / V.k;
+    layout();
+    const w = toWorld(cx, cy); aimAt(w.x, w.y, press.id, e.clientX, e.clientY, e.altKey);
+  }
+});
+map.addEventListener("pointerup", (e) => {
+  if (!press) return;
+  const p = press; press = null; map.classList.remove("panning"); clearTimeout(p.timer);
+  const [cx, cy] = mapXY(e);
+  if (p.mode === "pan") { if (!p.moved) { V.sel.clear(); if (!document.body.classList.contains("phone")) V.open = null; V.picker = false; render(); } return; }
+  if (p.mode === "link") { const to = V.drop, from = V.link.from; V.link = null; V.drop = null; renderMap(); if (to != null && to !== from) linkMenu(from, to, e.clientX + 8, e.clientY + 8); return; }
+  if (p.mode === "maybe-drag") {
+    if (p.shift) { V.sel.has(p.id) ? V.sel.delete(p.id) : V.sel.add(p.id); }
+    else { V.sel.clear(); openNote(p.id, false); }
+    render(); return;
+  }
+  if (p.mode === "drag") {
+    const target = V.drop, { id, dx, dy } = V.drag, w = toWorld(cx, cy); endAim();
+    if (V.tidy) { V.drag = null; V.drop = null; place(id, target === "strip" ? null : target, e.altKey, w); }
+    else { V.drop = null; dropFree(id, target, e.altKey, dx, dy); V.drag = null; }
+    render();
+  }
+});
+map.addEventListener("dblclick", (e) => { const h = e.target.closest(".area > .head"); if (h) zoomTo([+h.dataset.id]); });
+map.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const [cx, cy] = mapXY(e);
+  if (e.ctrlKey || e.metaKey) { const k = Math.min(2.5, Math.max(0.3, V.k * Math.exp(-e.deltaY * 0.01))); V.tx = cx - (cx - V.tx) * (k / V.k); V.ty = cy - (cy - V.ty) * (k / V.k); V.k = k; }
+  else { V.tx -= e.deltaX; V.ty -= e.deltaY; }
+  renderMap();
+}, { passive: false });
+function zoomBy(f) { const r = map.getBoundingClientRect(), cx = r.width / 2, cy = r.height / 2, k = Math.min(2.5, Math.max(0.3, V.k * f)); V.tx = cx - (cx - V.tx) * (k / V.k); V.ty = cy - (cy - V.ty) * (k / V.k); V.k = k; renderMap(); }
+function zoomTo(ids, maxK = 1.6) {
+  const rs = ids.map((i) => R[i]).filter(Boolean); if (!rs.length) return;
+  if (ids.length > 1 && STRIP) rs.push(STRIP);
+  const x1 = Math.min(...rs.map((r) => r.x)), y1 = Math.min(...rs.map((r) => r.y)), x2 = Math.max(...rs.map((r) => r.x + r.w)), y2 = Math.max(...rs.map((r) => r.y + r.h));
+  const m = map.getBoundingClientRect(), inset = 0;
+  const k = Math.min(maxK, (m.width - inset - 80) / (x2 - x1), (m.height - 120) / (y2 - y1));
+  V.k = k; V.tx = inset + (m.width - inset - (x2 - x1) * k) / 2 - x1 * k; V.ty = (m.height - (y2 - y1) * k) / 2 - y1 * k; renderMap();
+}
+function openNote(id, centre = true) {
+  V.open = id; V.picker = false; V.filter = "";
+  if (id === 7) V.seen7 = true;
+  for (const p of pathsTo(id)) for (let i = 1; i < p.length; i++) V.expanded.add(p.slice(0, i).join("/"));
+  if (V.lens !== "places" && !loose(id)) V.lens = "places";
+  render();
+  if (centre && R[id]) {
+    // bring it into view with the smallest move, so the rest of the map stays where it was
+    const m = map.getBoundingClientRect(), r = R[id], l = r.x * V.k + V.tx, t = r.y * V.k + V.ty, rr = l + r.w * V.k, b = t + r.h * V.k;
+    V.tx += l < 40 ? 40 - l : rr > m.width - 40 ? Math.max(40 - l, m.width - 40 - rr) : 0;
+    V.ty += t < 40 ? 40 - t : b > m.height - 40 ? Math.max(40 - t, m.height - 40 - b) : 0;
+    renderMap();
+  }
+  document.querySelector(`.row[data-id="${id}"]`)?.scrollIntoView({ block: "nearest" });
+  if (document.body.classList.contains("phone")) document.body.classList.remove("drawer");
+}
+
+// ── explorer interaction (drag and drop between rows, and onto the map) ────────────────────
+const tree = $("#tree");
+tree.addEventListener("click", (e) => {
+  const tw = e.target.closest("[data-tw]"); const r = e.target.closest(".row");
+  if (tw && tw.textContent.trim() && tw.textContent !== "↺") { const k = tw.dataset.tw; V.expanded.has(k) ? V.expanded.delete(k) : V.expanded.add(k); renderTree(); return; }
+  if (r) openNote(+r.dataset.id);
+});
+tree.addEventListener("keydown", (e) => {
+  const r = e.target.closest(".row"); if (!r) return;
+  const rows = [...tree.querySelectorAll(".row")], i = rows.indexOf(r), k = r.dataset.key;
+  if (e.key === "ArrowDown") rows[i + 1]?.focus();
+  else if (e.key === "ArrowUp") rows[i - 1]?.focus();
+  else if (e.key === "ArrowRight") { V.expanded.add(k); renderTree(); tree.querySelector(`[data-key="${k}"]`)?.focus(); }
+  else if (e.key === "ArrowLeft") { V.expanded.delete(k); renderTree(); tree.querySelector(`[data-key="${k}"]`)?.focus(); }
+  else if (e.key === "Enter") openNote(+r.dataset.id);
+  else return;
+  e.preventDefault();
+});
+let dragRow = null;
+tree.addEventListener("dragstart", (e) => { const r = e.target.closest(".row"); dragRow = +r.dataset.id; e.dataTransfer.setData("text/plain", T(dragRow)); e.dataTransfer.effectAllowed = "copyMove"; });
+tree.addEventListener("dragover", (e) => { const r = e.target.closest(".row"); if (!r || dragRow == null || +r.dataset.id === dragRow) return; e.preventDefault(); tree.querySelectorAll(".drop").forEach((x) => x.classList.remove("drop")); r.classList.add("drop"); });
+tree.addEventListener("dragleave", (e) => e.target.closest?.(".row")?.classList.remove("drop"));
+tree.addEventListener("drop", (e) => { e.preventDefault(); const r = e.target.closest(".row"); if (r && dragRow != null) { place(dragRow, +r.dataset.id, e.altKey); dragRow = null; render(); } });
+map.addEventListener("dragover", (e) => { if (dragRow == null) return; e.preventDefault(); const [cx, cy] = mapXY(e), w = toWorld(cx, cy); aimAt(w.x, w.y, dragRow, e.clientX, e.clientY, e.altKey); });
+map.addEventListener("drop", (e) => {
+  if (dragRow == null) return; e.preventDefault();
+  const [cx, cy] = mapXY(e), w = toWorld(cx, cy), t = V.drop, id = dragRow; dragRow = null; V.drop = null; endAim();
+  if (V.tidy) place(id, t === "strip" ? null : t, e.altKey, w);
+  else { const r = R[id]; dropFree(id, t, e.altKey, w.x - CW / 2 - r.x, w.y - CH / 2 - r.y); }
+  render();
+});
+document.addEventListener("dragend", () => { dragRow = null; V.drop = null; endAim(); tree.querySelectorAll(".drop").forEach((x) => x.classList.remove("drop")); renderMap(); });
+
+// ── panel, lenses, top bar, keys ──────────────────────────────────────────────────────────
+document.addEventListener("click", (e) => {
+  const t = e.target;
+  if (t.closest("[data-undo]")) { undo(); t.closest(".toast")?.remove(); return; }
+  if (t.closest("[data-close]")) { V.open = null; V.picker = false; render(); return; }
+  if (t.closest("[data-picker]")) { V.picker = !V.picker; V.filter = ""; renderPanel(); return; }
+  const pk = t.closest("[data-pick]"); if (pk) { const id = V.open; V.picker = false; if (place(id, +pk.dataset.pick, partParents(id).length > 0)) render(); else renderPanel(); return; }
+  const up = t.closest("[data-unplace]"); if (up) { unplace(V.open, +up.dataset.unplace, up.dataset.kind); return; }
+  const go = t.closest("[data-go]"); if (go) { openNote(+go.dataset.go); return; }
+  if (t.closest("[data-new-under]")) { askNew(V.open); return; }
+  if (t.closest("[data-group]")) { askGroup(); return; }
+  if (t.closest("[data-clear]")) { V.sel.clear(); render(); return; }
+  const l = t.closest("[data-lens]"); if (l) { V.lens = l.dataset.lens; renderTree(); return; }
+  if (t.closest("[data-legend]")) { $("#legend").hidden = true; return; }
+  if (t.closest("[data-min]")) { $("#tasks").classList.toggle("min"); renderTasks(); return; }
+  if (!t.closest(".menu")) document.querySelectorAll(".menu").forEach((m) => m.remove());
+});
+document.addEventListener("input", (e) => { if (e.target.id === "pick") { V.filter = e.target.value; renderPanel(); } });
+$("#newNote").onclick = () => askNew(null);
+$("#convert").onclick = askConvert;
+$("#fit").onclick = () => zoomTo(Object.keys(R).map(Number), 1);
+$("#zoomIn").onclick = () => zoomBy(1.25);
+$("#zoomOut").onclick = () => zoomBy(0.8);
+$("#tidyBtn").onclick = () => setTidy(!V.tidy);
+$("#floeBtn").onclick = (e) => { e.stopPropagation(); document.querySelector(".menu") ? closeMenus() : tidyMenu(e.currentTarget); };
+$("#linksBtn").onclick = (e) => { e.stopPropagation(); document.querySelector(".lines-menu") ? closeMenus() : linesMenu(e.currentTarget); };
+try { const l = JSON.parse(localStorage.getItem("f42-lines") ?? "null"); if (l) { V.shape = l.shape; V.kindsShown = new Set(l.shown); } } catch {}
+$("#themeBtn").onclick = () => { const d = document.documentElement; d.dataset.theme = d.dataset.theme === "dark" ? "light" : "dark"; };
+$("#menuBtn").onclick = () => document.body.classList.toggle("drawer");
+$("#phoneBtn").onclick = () => {
+  closeMenus();
+  const s = document.createElement("div"); s.className = "scrim";
+  s.innerHTML = `<div class="phone-frame"><iframe title="Phone view" src="${location.pathname}?phone${document.documentElement.dataset.theme === "dark" ? "&dark" : ""}"></iframe></div>`;
+  s.onclick = (e) => { if (e.target === s) s.remove(); };
+  document.body.appendChild(s);
+};
+// find
+const find = $("#find"), results = $("#results");
+let hits = [], hi = 0;
+function showFind() {
+  const q = find.value.trim().toLowerCase();
+  hits = q ? Object.values(S.notes).filter((n) => n.title.toLowerCase().includes(q)).slice(0, 8) : [];
+  hi = 0; results.hidden = !hits.length;
+  results.innerHTML = hits.map((n, i) => { const p = nestParents(n.id).map((e) => T(e.to)); return `<div class="${i === hi ? "on" : ""}" data-hit="${n.id}">${n.icon} ${esc(n.title)} <small>${p.length ? "in " + esc(p.join(", ")) : loose(n.id) ? "not placed" : ""}</small></div>`; }).join("");
+}
+find.addEventListener("input", showFind);
+find.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") { hi = (hi + (e.key === "ArrowDown" ? 1 : hits.length - 1)) % Math.max(1, hits.length); results.querySelectorAll("div").forEach((d, i) => d.classList.toggle("on", i === hi)); e.preventDefault(); }
+  if (e.key === "Enter" && hits[hi]) { openNote(hits[hi].id); find.value = ""; results.hidden = true; find.blur(); }
+  if (e.key === "Escape") { find.value = ""; results.hidden = true; find.blur(); }
+});
+results.addEventListener("pointerdown", (e) => { const d = e.target.closest("[data-hit]"); if (d) { e.preventDefault(); openNote(+d.dataset.hit); find.value = ""; results.hidden = true; find.blur(); } });
+find.addEventListener("blur", () => setTimeout(() => (results.hidden = true), 100));
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT") return;
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.key === "z") { e.preventDefault(); undo(); }
+  else if (mod && e.key === "g") { e.preventDefault(); askGroup(); }
+  else if (mod && e.key === "k") { e.preventDefault(); find.focus(); }
+  else if (e.key === "Escape") { closeMenus(); V.sel.clear(); V.picker = false; render(); }
+});
+addEventListener("resize", () => { V.mapRect = map.getBoundingClientRect(); renderMap(); });
+
+// ── start ─────────────────────────────────────────────────────────────────────────────────
+const qs = new URLSearchParams(location.search);
+if (qs.has("phone")) document.body.classList.add("phone");
+if (qs.has("dark")) document.documentElement.dataset.theme = "dark";
+else if (matchMedia("(prefers-color-scheme: dark)").matches) document.documentElement.dataset.theme = "dark";
+V.mapRect = map.getBoundingClientRect();
+let saved = null; try { saved = localStorage.getItem("f42-arrange"); } catch {}
+if (saved === "off") { layout(); for (const id in R) { S.notes[id].x = R[id].x; S.notes[id].y = R[id].y; } V.tidy = false; $("#tidyBtn").setAttribute("aria-pressed", false); }
+render();
+if (narrow()) { V.k = 0.85; V.tx = 12; V.ty = 12; renderMap(); } else zoomTo(Object.keys(R).map(Number), 1);
+</script>
+</body>
+</html>

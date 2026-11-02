@@ -11,7 +11,7 @@ Sizes are rough: **S** an evening, **M** a few days, **L** a week or more.
 
 Add new ideas under **Ideas** in a line or two; promote them to **Next** once it's clear what
 done looks like. Finished items go to [CHANGELOG.md](CHANGELOG.md), and a finished item's
-design moves to [design/](design/) (F12, F14, F16, F17, F19, F21 so far).
+design moves to [design/](design/) (F12, F14, F16, F17, F19, F21, F22, F23, F24, F25, F26, F28 so far).
 
 **Contents**
 
@@ -28,76 +28,69 @@ design moves to [design/](design/) (F12, F14, F16, F17, F19, F21 so far).
 Things that could lose data, stop the service, or that are visibly wrong today. These come
 before features.
 
-### N12 — Consolidation pass: check what's been built, not just that it passes
-
-**Size** M · **Evidence** 22 releases in three days (v0.0.1–v0.0.22); every phone test is an
-emulated iPhone in headless Chromium; principle 9 (accessible) has no check behind it; F16
-claims speed at 10,000 notes but nothing measures it; the backup has never been restored
-
-**Done when:**
-- **Real iPhone:** the main journeys (open, edit, link, search, share from the phone, offline,
-  Settings) are tried on a real iPhone in Safari and as a home-screen app, and what's wrong is
-  fixed or listed here.
-- **Accessibility (automated part done 2026-10-13):** axe (WCAG 2.1 A and AA) runs in the UI
-  tests on the vault home, a note, a type page, Tasks, the command palette, every Settings
-  section and sign-in, laptop and iPhone, light and dark, and finds nothing; a keyboard-only
-  test opens, edits and settles a note and checks Tab never leaves a dialog. Fixed on the way:
-  contrast (faint text, accent and danger tokens), names for the editor, task checkboxes,
-  property inputs and selects, the view switch as a radio group, the palette and quick
-  switcher as a combobox and listbox, a focus trap in dialogs, focus landing in the text when
-  a note is opened from the keyboard, and a palette bug that listed every command when
-  nothing matched. Still to do: VoiceOver on a real iPhone.
-- **Speed at 10,000 notes (done 2026-10-13):** `bun run bench` builds a 10,000-note vault
-  (links, tags, People and Meetings) and times the endpoints against budgets in
-  `scripts/bench.ts`; all pass. It found three real problems, now fixed: a type page took 32 s
-  and the graph didn't load at all (link resolution was a "path ends with" test against every
-  note; now an equality join, 13 ms and 150 ms), and an import of 10,000 notes took 61 s
-  (lookups by path had no index, and query plans made on the empty vault stayed scans; now
-  12 s). In the browser the vault opens in ~150 ms, the quick switcher answers in ~45 ms, and
-  note, type and task pages load in 75–130 ms.
-- **Restore works (done 2026-10-13):** `scripts/restore.ts` restores a backup zip into an empty
-  database, and an e2e test restores one and compares every note, file, version, folder and
-  Trash entry. Done by hand too (2026-10-13): a real nightly artifact (2 vaults, 132 notes, 10
-  files) restored into a scratch database with every note and file accounted for.
-- **Stream the backup zip (done 2026-10-13):** `/api/backup` streams; a 472 MB backup peaked at
-  315 MB of server memory (148 MB at rest), against the whole zip held before.
+Nothing open: N12, the last item, was finished on 2026-11-01 (see the CHANGELOG).
 
 ---
 
 ## Next: in this order
 
-**Decided 2026-10-12, after taking stock.** Small writing improvements come between the large
-items, chosen by what's used every day (see Ideas, such as `#Type` inline; the history diff, saved searches, focus mode, turning a
-line into a typed note and the tour are done).
+**Decided 2026-11-01, after N12 and the [gap analysis](GAP-ANALYSIS.md).** Everything before this
+is done (the earlier lists, F9 to F34, are in the CHANGELOG). The order follows what's felt every
+week in a personal and household library shared by a few people: **get it into hands**, then
+**be nudged**, then **capture from anywhere**, then **share and talk**, and only then the larger
+builds. Each step is kept to its first useful slice, and the ones marked *design first* get a
+`docs/design/<id>.md` and David's decisions before code.
 
-**Decided 2026-10-25, revised the same evening:** N12 (above) first (N15, the review pass, is done: see the CHANGELOG), then this list in
-order, each kept to its first useful slice. The journal comes before Mac folders because it's
-used every day and builds the real collections F20's presets wait on; Mac folders wait until
-it's clear work notes belong in Commonplace on the Mac (the standalone file covers a folder
-already).
+**Phase 1 — Reach: the apps in hands**
+1. **TestFlight (S, L8)** — the iPhone and Mac apps install from an invitation and update
+   themselves, so the family can have them too. David creates the App Store Connect record (a unique
+   name: **DO Notes**) after the trademark search (item 13).
+2. ~~**F35 Reminders for dated tasks**~~ — done 2026-11-01 (see `docs/design/F35.md`): the biggest everyday gap: a task with a
+   date tells you on the day, on the iPhone and the Mac. Builds the notification channel that F39
+   reuses.
+3. ~~**F36 Quick capture**~~ — done 2026-11-01: a home-screen and lock-screen widget on the iPhone, and on the Mac
+   a hotkey window from anywhere and a menu-bar item (L8 step 3), all saving to the Inbox like
+   sharing does.
 
-1. ~~**F20, slim**~~ — done in v0.0.54 (Setup, starter-type sets, home collection, grouped
-   menu; see the CHANGELOG). The built-in types (presets) wait until a few collections show what
-   repeats; the rest of F20 is below.
-2. **F24** — the journal, release 1, if it would replace Day One; otherwise just a Day One import
-   and On this day. **Open question for David:** would it replace Day One?
-3. **F25** — OAuth sign-in for the MCP server, so claude.ai and the Claude iPhone app can use
-   the notes, not only Claude Code.
-4. **F26** — `#Type` inline: typing `#Person Sam` makes the typed note as you type.
-5. **F22, folder only** — a Mac collection whose master copy is a folder of Markdown.
-   "Database" is the laptop kit as it is; "both" (two-way sync) waits until it's missed.
-6. Then take stock. Waiting until there's a reason:
-   - **F23**, one collection list on the Mac: only if two lists hurt after F22.
-   - **The rest of F20** (presets, Change type, Close the programme): once a few real
-     collections show what repeats.
-   - **F18** steps 3–4 or **F11**: the site builder, themes and extras, or visual boards. F18
-     steps 1–2 (publish, and the builder) are done.
-   - **F9**: AI-XF identity and bundles, now smaller because F16 built its first step.
+**Phase 2 — Capture from anywhere**
+4. ~~**F37 Web clipper**~~ — done 2026-11-01 (`clipper/`; Safari's needs the Xcode sign-in to build): a Safari extension (inside the Mac app) and a Chrome extension: save
+   the page, a selection or a picture, with its source, to the Inbox or a Weblink note.
+5. ~~**F33 step 2**~~ — any service with a token or none, done 2026-11-01; then the ~~**Floe preset**~~ (done) and
+   ~~**F33 step 4**~~, "From your connections" in the side panel (done 2026-11-01). Steps 3 (any OAuth service) and
+   5 (admin policy) wait for a service that needs them.
+6. ~~**Text inside photos and PDFs, and voice notes**~~ — done 2026-11-01: one extraction pipeline:
+   OCR and PDF text become searchable, and a recorded voice note is kept and transcribed.
 
-F19 (GitHub vaults sending on their own) is done, and N11 passed on the live site; F21 (the
-graph's timeline) is done; see the CHANGELOG.
+**Phase 3 — Share and talk**
+7. ~~**F38 Share one note by link**~~ — done 2026-11-01: a read-only, revocable link to one note (a snapshot, as
+   publishing is), without publishing a site.
+8. ~~**F39 Notifications and activity**~~ — done 2026-11-01 (`docs/design/F39.md`): an invitation, a mention, a
+   change to a note you follow; a "since you last looked" feed in a shared collection; `@people`.
+9. ~~**L3 Comments on notes**~~ — done 2026-11-01 (`docs/design/L3.md`): after F39, which tells people about them.
 
-L8 (the iPhone and desktop apps) waits on the Apple Developer decision; F23 starts its desktop half.
+**Phase 4 — Trust and the rest**
+10. ~~**F40 Two-step sign-in**~~ — done 2026-11-02: a code app (TOTP) with recovery codes after the
+    password, and an account that signs in with passkeys only.
+11. ~~**F30 step 4**~~ — Send to Longview, done 2026-11-02.
+12. ~~**Siri: Open a note and Ask DO Notes**~~ — done 2026-11-02 (both open the app: `/find` and `/ask`).
+13. ~~**Settle the name before version 1**~~ — decided 2026-11-02: **DO Notes** (David Oliver's
+    initials; "Skein" was hard to say), shown everywhere people look; a work edition would get
+    its own name. Code names stay `commonplace`, and the ball-of-thread icon stays. Still to do:
+    a UK IPO and USPTO search (classes 9 and 42) before the App Store Connect record. A first web
+    check found no app or trademark called "DO Notes" (nearest: ToDoNote, a Korean to-do app;
+    DocNotes, a 2021 US filing).
+
+**Phase 5 — Place notes by relationships**
+14. **F42 Map and explorer (L, design first: `docs/design/F42.md`)** — retire folders: an
+    explorer built from relationships, a stable map of areas, folders converted to hub notes,
+    exports rebuilt from `part-of`; the map **replaces boards** (F11), which convert into boxes
+    and still export as `.canvas`. Decided 2026-11-02 after the clickable mockup
+    (`docs/design/F42-mockup.html`); waiting for David's go.
+
+**Waiting until there's a reason:** the rest of F20 (once real collections show what repeats);
+F18 steps 3–4 (themes and extras for published sites); imports from Notion, Apple Notes and
+Confluence; email in; drawing and handwriting; L4, L6 and L7 (more than one server); Android and
+Windows apps.
 
 ### F20 — Vault types and setup: who it's for, where it's kept, what's switched on
 
@@ -151,100 +144,6 @@ setup, and every choice stays changeable. Built in:
 **Done when** a vault can be made from each built-in type and from a saved one, its type changed
 and customised in Setup, the switcher groups vaults, the home vault receives shares, and it works
 on the laptop and the iPhone in both themes. Help: a new page, `vaults.md`.
-
-### F24 — Journal
-
-**Size** M, in two releases · **Evidence** daily notes exist (`Daily/YYYY-MM-DD.md`, the
-calendar in the side panel); journalling happens in Day One today.
-
-Entries go in the **home collection's** daily note (F20, done in v0.0.54), under `## Journal`, each with its time
-(`### 08:12`). On by default in Personal vaults.
-
-1. **Release 1:** a **New journal entry** command (⌘K, the ⋯ menu, press and hold on Today) opening
-   a short sheet that appends to today's note (a function passed to `overwriteContent`, so it
-   can't undo live typing); a **journal page** of daily notes newest first, with a calendar to
-   jump; **On this day** from earlier years; an `add_journal_entry` tool with a preview.
-2. **Release 2:** **import from Day One** (its JSON export: times, photos as files, tags), and
-   **Reflect on this week** (the assistant with the week's entries and a prepared request).
-
-Journal sections stay out of published sites unless chosen.
-
-**Open:** entries in the daily note (planned) or a note each; whether entries record mood or
-location; on the phone, a menu on Today or a Journal button.
-
-**Done when** release 1 works on the laptop and the iPhone in both themes with a browser test,
-and release 2 imports a real Day One export.
-
-### F25 — OAuth sign-in for the MCP server
-
-**Size** M · **Evidence** `docs/MCP.md`: claude.ai's custom connectors (and so the Claude iPhone
-and desktop apps) need OAuth; today only Claude Code and `mcp-remote` work, with a bearer token
-from Settings → Connections (`src/tokens.ts`, `src/mcp.ts`).
-
-The MCP server offers OAuth 2.1 with PKCE, as the MCP authorization spec asks: metadata at the
-well-known addresses, dynamic client registration, and a consent page in the app ("Claude wants
-to read and write your notes as you", with read-only as a choice). Signing in issues the same
-kind of hashed, scoped, revocable token as today, listed in Settings → Connections with the
-client's name and last use. Bearer tokens keep working.
-
-**Done when** claude.ai adds Commonplace as a custom connector, searches and reads notes and
-(when allowed) writes one, the token shows in Connections and revoking it cuts Claude off at
-once, and an e2e test drives the whole flow with a fake client.
-
-### F26 — `#Type` inline
-
-**Size** S · **Evidence** "Turn into a typed note…" (v0.0.29) already makes a typed note from a
-selection; the `#` menu offers tags (`web/lib/`), and F20 added 15 starter types.
-
-In the editor, `#` followed by a type's name (`#Person`) offers "New Person…" next to the
-tags. Choosing it and typing a title (`#Person Sam Okafor`, then Enter) makes the note from the
-type's template in the type's folder, and leaves a `[[Sam Okafor]]` link where the text was.
-A tag with the same name as a type still works as a tag.
-
-**Done when** it works in Live Preview on the laptop and the iPhone, Undo puts the text back,
-and a browser test makes a note this way.
-
-### F22 — Mac vaults: kept on the Mac, in a folder, its database, or both
-
-**Size** L · **Evidence** the laptop kit (`laptop/`, v0.0.45) runs Commonplace and Postgres on
-the Mac; the standalone file already edits a real folder (`standalone/vault.ts`).
-
-A Mac vault lives only on the Mac. You choose where its notes are saved:
-
-- **Folder:** a folder of `.md` files you pick is the master copy; edits made there by any
-  editor arrive at once (the server watches it). The Mac's database holds only an index (search,
-  links, graph), rebuilt from the folder whenever needed.
-- **Database:** notes in the Mac's Postgres, with history and Trash as in the cloud; a folder
-  export on request.
-- **Both:** folder and database kept in step both ways; a note changed on both sides at once
-  waits for you to choose, as GitHub clashes do (`git_clashes` is the model). Never conflict
-  markers in a note.
-
-A Mac vault is just you. It can add GitHub (F14, F19), which is how it reaches another machine
-without the cloud. The AI assistant and search by meaning are switches, off by default, and say
-that turning them on sends note text to your chosen provider. Writes still go through
-`createNote` / `overwriteContent`, and the folder watcher through `overwriteContent`, so live
-rooms see changes; renames and deletions in the folder become moves and Trash.
-
-**Done when** each of the three works in the laptop kit, a change on either side reaches the
-other, a clash waits for a choice, the folder survives a rebuild of the index, and the laptop
-guide covers it.
-
-### F23 — One vault list on the Mac: Mac vaults and cloud vaults together
-
-**Size** L · **Evidence** decided 2026-10-25 (option A over keeping the laptop kit separate);
-the first step of L8's desktop app, and a narrow first answer to L6 (federation).
-
-The Mac Commonplace holds its Mac vaults itself and signs in to the cloud with a **device token**
-(revocable, in Settings → Connections; L8 step 4) for the cloud vaults. One switcher shows both,
-grouped. **Move to Mac** and **Move to cloud** reuse copy-and-move between vaults
-(`src/between.ts`, v0.0.49) across the two servers: notes, attachments, types and history, the
-original to Trash. The iPhone sees only cloud vaults. Offline, cloud vaults behave as F4 does
-today and Mac vaults carry on as normal.
-
-**Done when** one switcher shows Mac and cloud vaults, a note and a folder move each way with
-Undo, the token can be revoked, and a cloud vault's live editing works from the Mac app as it
-does from the browser.
 
 ### F18 — Publish a vault to the web: a site builder with themes and features to switch on
 
@@ -304,104 +203,59 @@ service's key, or must stay a manual admin step (Render issues the certificate e
 pass the accessibility checks in [PRINCIPLES.md](PRINCIPLES.md), and a test proves an excluded
 note, its title and its attachments can't be reached by any URL.
 
-### F11 — Visual boards: a whiteboard view of notes (Heptabase / Scrintal / JSON Canvas)
+### F33 — Connections: connect any service that meets the bar, with guidance
 
-**Size** L, in four steps · **Evidence** JSON Canvas 1.0 (jsoncanvas.org, the open `.canvas`
-format); Heptabase and Scrintal feature research (2026-10-11), below
+**Size** L, in six steps · **Evidence** asked for 2026-11-01, after F30 connected Longview and
+Recall by hand · **Design** [design/F33.md](design/F33.md) (agreed 2026-11-01) · **Step 1 built 2026-11-01** (the core, Longview and Recall as presets, Review; see the CHANGELOG)
 
-Heptabase and Scrintal are infinite-canvas note tools: notes become cards on a board, arranged
-spatially and joined by arrows. The defining idea in both is that **a card is the note itself**:
-one note can sit on several boards, and editing it anywhere updates it everywhere. Heptabase adds
-sections, nested boards, mind maps and tidy-up layout; Scrintal adds nested "boards on boards"
-and shows a board's connections as backlinks in the cards. Heptabase's help docs reportedly put
-noticeable lag at 100–150 cards on one board.
+One connections manager for any MCP service that meets a stated bar (Streamable HTTP, a public
+`https` address or the same Mac on the kit, OAuth with PKCE, a token, or no sign-in past a
+warning), connected through a guided dialog: the address, what was found, signing in, choosing
+its tools, a test. **Read-only** (decided 2026-11-01): tools that change things are never
+offered. Read tools follow the web's send-out rule, for the assistant and in a **From your
+connections** side-panel section (which sends only the note's title and type, once turned on).
+A change to a service's tools holds it until reviewed. Longview and Recall become presets.
+Everyone may add connections. Never offered over Commonplace's MCP server. Six steps.
 
-**Store boards as JSON Canvas `.canvas` files, so they round-trip with other Markdown editors.** The format
-is small: `nodes` (`text`, `file` with optional `#subpath`, `link`, `group` with a `label`),
-each with integer `x`, `y`, `width`, `height` and an optional `color`, drawn in array order
-(z-index); and `edges` with `fromNode`/`toNode`, optional sides, arrow ends, `label` and
-`color`. Colours are hex or presets `"1"`–`"6"` (red, orange, yellow, green, cyan, purple),
-which ties in with F10's palette. In Commonplace a board is a document in the vault, edited live
-through Yjs like a note (nodes and edges as Y.Maps, so two people can move different cards at
-once), and exported or imported as `.canvas`.
+### F30 — Longview as a connection: its knowledge base in the assistant, read-only
 
-1. **View and import (M).** `.canvas` files from an existing vault import and open as boards:
-   pan and zoom (pinch on the phone), note cards showing the note rendered, text and link
-   cards, groups, labelled arrows. Imported canvases also export unchanged.
-2. **Edit boards (M).** Drag notes from the sidebar or search onto the board, create a new
-   note as a card, draw and label arrows, group cards into sections, resize, colour. Touch:
-   long-press to drag a card (as the file tree does), two fingers to pan and zoom.
-3. **Notes know their boards (S).** A note's side panel lists the boards it's on, and arrows
-   between note cards show in backlinks as "on board X". An option promotes an arrow to a relation
-   property in the note (F16, as F9 maps them), so the connection survives outside the board; by default
-   board arrows stay board-only.
-4. **Heptabase extras (M, optional).** Nested boards (a card that opens another board), a mind
-   map layout, tidy-up and auto-arranging a section.
+**Size** M for steps 1–2; steps 3–4 after F9 · **Evidence** asked for 2026-10-31; the overlap
+measured that day (Longview's ideas inbox, I9: of ~20 news stories in 68 AI-tagged Recall cards,
+9 were already in Longview, four by the same URL); Longview's read-scoped tokens
+(`MCP_READ_TOKENS`, Longview backlog N11); the existing connection pattern (`src/web.ts`,
+`user_search`, `src/secrets.ts`, `src/egress.ts`)
 
-**Choosing a library is part of step 1.** React Flow (`@xyflow/react`, MIT) suits cards and
-edges and handles pan, zoom and touch; Excalidraw (MIT) suits freehand sketching rather than
-note cards; tldraw is polished but its licence must be checked for this use. Decide with a
-spike: 150 cards on an iPhone must pan and zoom smoothly, the size at which Heptabase is said to
-slow down.
+Longview is a memory of the AI world: events, entities, trends, all cited. Commonplace is where
+personal notes about that world live. Today the only join is an AI client connected to both MCP
+servers at once (L6 option A). Wanted: Longview as a connection in Commonplace, so the in-app
+assistant can answer from it and a note can show what Longview knows about the things it mentions.
 
-**Done when** an existing vault with canvases imports and its boards look the same; a board made
-in Commonplace opens in other Markdown editors; two people can arrange the same board at once; and a note
-edited on one board shows the change on every board it's on.
+**Read-only by design.** The token is one of Longview's read tokens, so the tools that change
+Longview (`save_url`, the source editors, candidate writes) aren't even offered to it. Nothing
+in Commonplace can change Longview until step 4, which is a separate opt-in.
 
-### F9 — AI-XF: identity and bundles in and out (after F16)
+1. ~~**The connection (S)**~~ and 2. ~~**Longview tools for the in-app assistant (M)**~~ —
+   built 2026-11-01 with Recall alongside (see the CHANGELOG and ARCHITECTURE: `src/outside.ts`):
+   Settings → Connections → Longview (address and read token, write tokens refused) and Recall
+   (OAuth, `kb:read`), and `longview_*` / `recall_*` tools for the in-app assistant only.
+3. ~~**"In Longview" in the side panel**~~ — done 2026-11-01 as F33 step 4 (any connection, Longview included). **Was:** for the open note, the Longview events
+   about the entities it names. `[[longview-ai/<id>]]` references (AI-XF namespaces, F9) open
+   the event on Longview's search page.
+4. ~~**Send to Longview (S, opt-in)**~~ — done 2026-11-02 (`src/sendLongview.ts`). **Was:** on a Weblink note, send its URL to Longview's `save_url`.
+   Only the public URL goes, never the note. Needs a write token, kept as a second, separate
+   credential, so a read-only connection stays read-only.
 
-**Size** M overall, in three steps · **Evidence** AI-XF v0.5
-(the AI-XF spec: §4 concepts, §5 fields, §6 links, §9 namespaces,
-§11 conformance); Longview's exporter and importer; F16 types
-(`src/types.ts`), which already give `type:`, a type picker, `type:` search and types in the
-tree and graph
+**Not now:** a general "connect any MCP server" connection. Recall came second (2026-11-01) and
+fits the same small client, but each server's tools are still chosen and reviewed by hand
+(`src/outside.ts`): an arbitrary server means trusting tools nobody has reviewed.
 
-AI-XF is markdown with YAML frontmatter, so a Commonplace note is already nearly an AI-XF
-concept, and F16 built what this item's first plan called step 1 (types). What's left is
-identity and exchange, so a vault can go to and from Longview and any other AI-XF or
-OKF reader without a translation layer.
-
-**Decided 2026-10-12: one way to write relations.** F16 relations (`attendees: [[Sam]]`) are how
-notes are linked in Commonplace. AI-XF typed links (`links: [{rel, to}]`) are not a second
-editor: on export each relation property becomes a typed link with the property name as its
-`rel` (`attendees` → `attendees`, or a mapped core rel such as `depends-on`), and on import
-typed links become relation properties. So there's never a choice between two ways of saying
-"this meeting involved Sam".
-
-1. **Identity (S).** Links resolving by `aliases` and `id` is **done (2026-10-13, v0.0.31)**:
-   `notes.link_names` is generated from the frontmatter, and the server (`linkKeys`,
-   `resolveLink`) and the browser (`resolveLocal`) use it after path and title. Still to do:
-   `id` shown and generated from the title (lowercase kebab-case, no `/`) and kept on rename;
-   the `[[` autocomplete offering aliases (inserting `[[Title|Alias]]`).
-2. **Export a vault or folder as an AI-XF bundle (M).** The zip gains `manifest.ai-xf.yaml`
-   (`ai-xf`, `name`, `namespace`, `vocabularies`), writes relations as typed links (above) and
-   mirrors them as body links (§6.4, for OKF), and writes `generated`/`provenance` to reach
-   Level 2, or Level 3 with a namespace. Notes without a type export as `Note`. Frontmatter is
-   written in the canonical form (§5.7) **on export only**: writing it on save would reorder
-   frontmatter people wrote by hand. Checked in CI with the reference validator
-   (`tools/ai-xf-validate.py --level 3`).
-3. **Import an AI-XF bundle (S–M).** The importer recognises a manifest, keeps every
-   frontmatter key verbatim (§7.3a: `verified` is never invented), maps `id`s, turns typed
-   links into relation properties, and turns cross-bundle `namespace/id` references into links
-   that show as external until that bundle is imported too.
-
-**Done when** a Longview export imports into a vault with its types, ids and links intact as
-relation properties; that vault exports again and passes the reference validator at Level 3;
-and nothing about writing notes in Commonplace changed to get there.
+**Done when** a person connects Longview with a read token, the assistant answers "what does
+Longview have on Gemini 4 Carbon?" with cited events, a write tool isn't available on that
+connection, the token never reaches the browser or a log, and disconnecting removes it.
 
 ---
 
 ## Later
-
-### L3 — Comments on notes
-
-**Size** M–L
-
-Yjs relative positions would let a comment stay anchored to text while it's edited. For a
-shared vault more than a personal one, so it waits until a vault has regular second editors.
-
-**Done when** I can select text, comment on it, and see the comment stay attached while the
-text around it is edited by someone else; comments resolve and never enter the markdown.
 
 ### L4 — More than one server instance
 
@@ -483,18 +337,31 @@ Revisit if the data passes ~20 GB or Supabase's Multigres becomes generally avai
 **Size** L · **Evidence** PRINCIPLES.md §10; the capture Shortcut (2026-10-11) is the first
 non-browser client; Safari can't receive shares (WebKit bug 194593)
 
-Wrap the same web client rather than rewrite it: **Capacitor** for iOS (App Store or
-TestFlight; needs the $99/year Apple Developer Program) and **Tauri** for macOS and Windows.
+Wrap the same web client rather than rewrite it: a **native Swift** shell for iOS (`ios/`;
+Capacitor decided against, below) and **Tauri** for macOS and Windows.
 
-1. **iOS app (M):** the web client in a native shell, signed in with a device token; a real
-   **share extension** (links, text, photos, files) replacing the Shortcut; the home-screen
-   icon and splash; deep links (`commonplace://…` and universal links) open notes.
-2. **Offline in the app (S):** F4 already opens and edits notes offline in the browser; check
-   it carries over to the native shell's storage.
-3. **Desktop app (M):** Tauri window, menu bar and shortcuts, open-at-login, drag files in;
-   optionally a local folder mirrored as a plain folder of Markdown files.
-4. **Device tokens (S):** the capture tokens grow into per-device tokens with scopes
-   (capture, full), listed and revocable in Settings → Connections.
+1. ~~**iOS app (M)**~~ — built 2026-10-31 (see the CHANGELOG and ARCHITECTURE §7.12): the web
+   client in a `WKWebView`, the share extension (links, text, photos), the icon, deep links
+   and universal links. On David's iPhone (paid team, 2026-11-01), `APPLE_APP_IDS` set on
+   Render, passkeys working in it. **Still to do:** TestFlight, and files other than photos in
+   the share sheet.
+2. ~~**Offline in the app (S)**~~ — checked on David's iPhone 2026-11-01 (N12): open, edit
+   and merge offline all work. **Was:** the server's domain is app-bound, so the service worker runs;
+   check offline open, edit and merge on the real iPhone (N12's 3b).
+3. **Desktop app (M):** the Mac app is built (2026-11-01), as a native Swift app instead of
+   Tauri (`ios/Mac/`, sharing the iPhone app's code; see the CHANGELOG): windows and tabs,
+   menus, Settings for the server (cloud, kit or another), open at login, a share extension.
+   **Still to do:** dragging files onto the Dock icon, a signed and notarised build to give to others, and
+   Windows (Tauri, if ever).
+4. **Device tokens (S):** the app makes and drops its own capture token ("iPhone app") at sign-in
+   and sign-out; still to do, a full-scope device token if the app ever needs to work without
+   the web's cookie.
+5. **Siri and Shortcuts (S each):** ~~**Save to Commonplace**~~ built 2026-11-01 (an App
+   Intent in `ios/Intents/`, on the iPhone and the Mac: what you say goes to the Inbox). ~~**Open a
+   note**~~ and ~~**Ask DO Notes**~~ built 2026-11-02: both open the app (commonplace://find and
+   commonplace://ask), so they need no token beyond the app's sign-in. **Not done, on purpose:**
+   an answer Siri reads out without opening the app, which would need a token that can read
+   notes and run the assistant from outside the app.
 
 **Done when** the iPhone app is on TestFlight with a share extension that saves into the
 inbox, the desktop app runs on macOS, both sign in with revocable device tokens, and neither
@@ -506,16 +373,34 @@ needed a feature the web app doesn't have.
 
 One line each. Promote to **Next** with a "done when".
 
+- **Boards, next (F11):** drag a note from the file panel onto a board; a board tool for agents
+  (add cards and arrows, not raw JSON); boards in the standalone file; boards on published sites.
+
+- **Hover preview on the iPhone (S):** a long press or a Preview button in the link's Open ↗
+  bubble (release 2 did laptops).
+- **Editor usability, later (each needs a design first):** image alignment and captions (no
+  standard Markdown); @people (`@` calls assistants today); a side-by-side diff in Version
+  history; upload progress for dropped files; inline comments are L3.
+- **Import from Confluence (M, after F28):** a space or a page and its children, through
+  Confluence's REST API with an API token in a header; parent pages become `part-of`
+  relationships (F27), page properties become properties, @people become Person notes, macros map
+  to F28's blocks, comments go in a section at the end. AI-XF's E11 experiment
+  (`ai-xf-format/experiments/e11-migration`) has a mapping to start from.
+
 - The assistant's web, next: another search provider (or the provider's own search for Anthropic and OpenAI), PDFs, and a remembered globe setting per assistant
-- Three editions, as Longview has: the private repo (personal, deployed, with backups) feeds the
-  public one (`commonplace-md`, a snapshot per release), which a work edition could start from in
-  the employer's own repository, with its own sign-in and hosting. Nothing from the work edition
-  comes back.
+- Three editions, as Longview has: the private repo (**DO Notes**, personal, deployed, with
+  backups) feeds the public one (`commonplace-md`, a snapshot per release, MIT licensed, not a
+  commercial product), which a work edition could start from in its own repository, with its own sign-in and hosting. Nothing from the work edition comes back.
 - Folder and tag colours in the sidebar, stored per vault (other editors keep these in plugin
   settings, not in notes; see F10)
 - Import from Apple Notes or Notion
 - Per-vault theme or accent colour (F18's themes are tokens too; share them)
-
+- **Recall and Longview, joined through Commonplace (M, after F9; 2026-10-31):** (the
+  assistant reads both since 2026-11-01, F30) import new
+  Recall cards (Recall's MCP server, read-only) as notes in a Reading collection; link their
+  companies and models to Longview by AI-XF reference (`longview-ai/<id>`); send a chosen note's
+  URL to Longview's `save_url`. The overlap was measured 2026-10-31, and the shape is in
+  Longview's ideas inbox, I9. The Longview half is **F30**.
 From the brainstorm of 2026-10-11 (sizes rough; each must meet [PRINCIPLES.md](PRINCIPLES.md)):
 
 - **Media as objects (M, after F16, from Capacities):** pictures and PDFs get a page of their own,
@@ -526,13 +411,33 @@ From the brainstorm of 2026-10-11 (sizes rough; each must meet [PRINCIPLES.md](P
 - **Activity feed (M):** what changed in a shared vault since you last looked, per note and person
 - **Typography settings (S):** font and size choices, within the design language's scales, in
   Settings → Account
-- **Voice notes (M):** record on the iPhone, keep the audio as an attachment, transcribe with
-  your own AI key (F13)
-- **Searchable photos and PDFs (M):** text in pictures and scans extracted and indexed for search
+- **Email in (M):** forward an email to a private address and it lands in the Inbox
 
 ---
 
 ## Decided against
+
+- **Capacitor for the iPhone app (L8, 2026-10-31):** a native Swift shell instead. The share
+  extension is Swift either way, the app is one web view, and Capacitor would add a Node
+  toolchain, plugins and a build step for nothing the web client doesn't already do.
+
+- **A ready-made Share from iPhone shortcut, for now (2026-10-31):** tried a shortcut file built in
+  code and signed with `shortcuts sign` (no address or token in it; iOS asks for a setup code
+  when it's added). Signing and the import sheet worked, but on macOS 27 **Add Shortcut** returned
+  to the question instead of adding it, with nothing in the log, and Apple documents neither the
+  format nor import questions. The approach others use is a shortcut built once in the app and
+  shared as an iCloud link with an import question; the real fix is the iPhone app's share
+  extension (L8). Building it by hand stays.
+
+- **A Confluence-style page tree (2026-10-26):** pages are never both a page and a folder of
+  child pages. A page says it's `part-of` another (F27, AI-XF's relationship), and the other
+  shows it under Has part, so the structure lives in the Markdown, not in an order the app keeps.
+- **Dragging table rows and columns (2026-10-26):** the Row and Column menus move them a step at a
+  time, the same on a phone, where dragging inside a grid fights scrolling. (Wide tables already
+  scroll sideways inside the note.)
+- **Layouts and columns, and tables with merged cells (2026-10-26):** Markdown can't say either,
+  so they'd be HTML other editors show badly. An import flattens layouts into one column and
+  writes a merged table as plainly as it can.
 
 - **Hover previews on published sites (F18, 2026-10-18):** they need script, and published pages
   run none (the CSP allows none, so nothing on a page can act as the app). Links go to the page.

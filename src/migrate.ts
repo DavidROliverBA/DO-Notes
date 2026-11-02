@@ -14,7 +14,9 @@ export async function migrate(): Promise<void> {
       await sql.unsafe(schema);
       return;
     } catch (err) {
-      if ((err as { code?: string }).code !== "40P01" || attempt >= 5) throw err;
+      // Up to ten tries, about 11 s in all: a busy old instance can win several in a row, and a
+      // server that gives up doesn't start at all.
+      if ((err as { code?: string }).code !== "40P01" || attempt >= 10) throw err;
       console.warn(`schema deadlocked with another connection; trying again (${attempt})`);
       await Bun.sleep(200 * attempt);
     }

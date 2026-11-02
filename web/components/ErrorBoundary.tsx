@@ -16,7 +16,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode; resetKey?: u
     if (!this.state.error) return this.props.children;
     return (
       <div className="empty-state" role="alert">
-        <p>This page couldn't be shown: Commonplace hit a fault while drawing it.</p>
+        <p>This page couldn't be shown: DO Notes hit a fault while drawing it.</p>
         <p className="muted small">Try again, or open another note from the sidebar. If it keeps happening, reload the page.</p>
         <p className="muted small">Details: {this.state.error.message}</p>
         <div className="row">

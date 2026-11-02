@@ -20,6 +20,7 @@ Publishing takes a **copy**. Your edits stay private until you publish again, an
 
 - A link to a note that isn't published shows as plain words, so its name doesn't leak.
 - A note with `publish: false` in its properties is never published.
+- A daily note's `## Journal` section is always left out, so your [journal](journal.md) stays private.
 - Pictures and files are published only if a published page shows them.
 - The site's address has a random part, and search engines are asked to leave it out. Anyone you give the link to can read it.
 

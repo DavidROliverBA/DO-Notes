@@ -8,7 +8,7 @@ standalone: true
 
 ## Dataview queries
 
-A `dataview` code block is a query that lists notes from their properties, tags, links and tasks. Its result stays up to date as the collection changes. Commonplace reads the same query language as the Dataview plugin for other Markdown editors.
+A `dataview` code block is a query that lists notes from their properties, tags, links and tasks. Its result stays up to date as the collection changes. DO Notes reads the same query language as the Dataview plugin for other Markdown editors.
 
 ````
 ```dataview

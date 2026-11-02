@@ -4,11 +4,13 @@
 
 import DOMPurify from "dompurify";
 import { Marked, type Tokens } from "marked";
-import { isAttachmentPath, parseFrontmatter } from "../../src/markdown";
+import { STATUS_RE, statusColour, TOC_RE, tocHtml, WEB_LINE } from "../../src/blocks";
+import { headings, isAttachmentPath, parseFrontmatter } from "../../src/markdown";
 import type { NoteSummary } from "./api";
 import { resolveLocal } from "./links";
 import { colourOf, hiloColour } from "./colours";
 import { diagramHtml } from "./mermaid";
+import { codeBlockHtml } from "../../src/codeHighlight";
 import { inlineQuery } from "../../src/dataview";
 
 // Colours (F10): before attributes are checked, a span, mark or font's colour becomes a palette
@@ -58,7 +60,7 @@ export function renderMarkdown(md: string, vaultId: number, notes: NoteSummary[]
         level: "inline",
         start: (src: string) => src.match(/!?\[\[/)?.index,
         tokenizer(src: string) {
-          const m = /^(!?)\[\[([^\[\]|\n]+?)(?:\|([^\[\]\n]*))?\]\]/.exec(src);
+          const m = /^(!?)\[\[([^\[\]|\n]+?)(?:\\?\|([^\[\]\n]*))?\]\]/.exec(src);
           if (m) return { type: "wikilink", raw: m[0], embed: m[1] === "!", target: m[2]!.trim(), alias: m[3]?.trim() };
         },
         renderer(t: any) {
@@ -98,6 +100,19 @@ export function renderMarkdown(md: string, vaultId: number, notes: NoteSummary[]
         },
       },
       {
+        // :status[Done]{.green}: a coloured label (F28).
+        name: "status",
+        level: "inline",
+        start: (src: string) => src.indexOf(":status["),
+        tokenizer(src: string) {
+          const m = STATUS_RE.exec(src);
+          if (m) return { type: "status", raw: m[0], label: m[1]!, colour: statusColour(m[2]) };
+        },
+        renderer(t: any) {
+          return `<span class="status status-${t.colour}">${esc(t.label)}</span>`;
+        },
+      },
+      {
         name: "tag",
         level: "inline",
         start: (src: string) => src.match(/(^|\s)#[\p{L}_\-/]/u)?.index,
@@ -119,7 +134,7 @@ export function renderMarkdown(md: string, vaultId: number, notes: NoteSummary[]
         if (kind === "dataview") return `<div class="dataview-block"><pre><code>${esc(text)}</code></pre></div>\n`;
         // ```dataviewjs: run in a sandboxed frame by web/lib/dataviewjs.ts.
         if (kind === "dataviewjs") return `<div class="dataviewjs-block"><pre><code>${esc(text)}</code></pre></div>\n`;
-        return false;
+        return codeBlockHtml(text, lang, esc, true);
       },
       // `= expression` (and `$= dv.pages(…)…` in the form src/dataview.ts reads): its result.
       codespan({ text }: Tokens.Codespan) {
@@ -146,8 +161,13 @@ export function renderMarkdown(md: string, vaultId: number, notes: NoteSummary[]
       },
       // A [[link]] alone in its paragraph may become a link card (F16 step 5), if its note's type
       // shows cards; the plain link stays inside as the fallback.
-      paragraph({ tokens }: Tokens.Paragraph) {
+      paragraph({ tokens, raw }: Tokens.Paragraph) {
+        // [TOC] alone: the note's headings (F28); NoteView scrolls to the one clicked.
+        if (TOC_RE.test(raw)) return tocHtml(headings(body), () => "#", esc) + "\n";
         const inner = this.parser.parseInline(tokens);
+        // A web address alone: a card (F28), filled by web/lib/embeds.ts; the link stays inside.
+        const url = WEB_LINE.exec(raw)?.[1];
+        if (url) return `<div class="web-card" data-url="${esc(url)}"><p>${inner}</p></div>\n`;
         const only = tokens.filter((x) => !(x.type === "text" && !x.raw.trim()));
         if (only.length === 1 && (only[0] as any).type === "wikilink" && !(only[0] as any).embed) {
           return `<div class="link-card" data-card="${esc((only[0] as any).target)}"><p>${inner}</p></div>\n`;
@@ -156,13 +176,15 @@ export function renderMarkdown(md: string, vaultId: number, notes: NoteSummary[]
       },
       blockquote({ tokens }: Tokens.Blockquote) {
         const inner = this.parser.parse(tokens);
-        // > [!type] Optional title    (callouts; [!type]- / [!type]+ fold markers ignored)
-        const m = /^<p>\[!([\w-]+)\][+-]?[ \t]*([^\n<]*)(?:\n|<br>)?/i.exec(inner);
+        // > [!type] Optional title    (callouts; [!type]- folds closed, [!type]+ open)
+        const m = /^<p>\[!([\w-]+)\]([+-]?)[ \t]*([^\n<]*)(?:\n|<br>)?/i.exec(inner);
         if (!m) return `<blockquote>${inner}</blockquote>`;
         const type = m[1]!.toLowerCase();
-        const title = m[2]!.trim() || type[0]!.toUpperCase() + type.slice(1);
+        const title = m[3]!.trim() || type[0]!.toUpperCase() + type.slice(1);
         let rest = inner.slice(m[0].length);
         rest = /^\s*<\/p>/.test(rest) ? rest.replace(/^\s*<\/p>/, "") : `<p>${rest}`;
+        // [!type]- folds closed and [!type]+ open (F28's Expand), with no script: <details>.
+        if (m[2]) return `<details class="callout" data-callout="${esc(type)}"${m[2] === "+" ? " open" : ""}><summary class="callout-title">${esc(title)}</summary><div class="callout-body">${rest}</div></details>`;
         return `<div class="callout" data-callout="${esc(type)}"><div class="callout-title">${esc(title)}</div><div class="callout-body">${rest}</div></div>`;
       },
     },
@@ -170,7 +192,9 @@ export function renderMarkdown(md: string, vaultId: number, notes: NoteSummary[]
 
   let html = "";
   if (raw.trim()) {
+    // A note's AI-XF id (F9) is for links and bundles, not reading: it isn't shown.
     const rows = Object.entries(data)
+      .filter(([k]) => k !== "id")
       .map(([k, v]) => {
         const val = Array.isArray(v) ? v.map((x) => `<span class="pill">${esc(String(x))}</span>`).join(" ") : esc(v instanceof Date ? v.toISOString().slice(0, 10) : typeof v === "object" ? JSON.stringify(v) : String(v));
         return `<tr><th>${esc(k)}</th><td>${val}</td></tr>`;
@@ -180,7 +204,7 @@ export function renderMarkdown(md: string, vaultId: number, notes: NoteSummary[]
   }
   html += marked.parse(body, { async: false }) as string;
   return DOMPurify.sanitize(html, {
-    ADD_ATTR: ["target", "data-target", "data-tag", "data-task", "data-callout", "loading", "data-cp-colour", "data-dv-expr"],
+    ADD_ATTR: ["target", "data-heading", "data-url", "data-target", "data-tag", "data-task", "data-callout", "loading", "data-cp-colour", "data-dv-expr"],
     ADD_TAGS: ["audio", "video"],
     // A note must not be able to restyle or overlay the app for other members.
     FORBID_TAGS: ["style", "form"],

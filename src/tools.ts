@@ -9,9 +9,11 @@
 // changes. Nothing deletes outright: merge_notes moves the duplicate to Trash, and so does
 // copy_to_vault's move, where it can be restored.
 
+import { isCanvasPath, parseCanvas } from "./canvas";
 import { z } from "zod";
 import { HttpError, type User } from "./auth";
 import * as between from "./between";
+import * as journal from "./journal";
 import { flushNote, kick } from "./collab";
 import { normalisePath, parseFrontmatter, rewriteWikiLinks, sectionRange, titleFromPath } from "./markdown";
 import { withProperties } from "./props";
@@ -103,7 +105,9 @@ function noteChange(summary: (title: string) => string, next: (a: any, cur: stri
   const plan = async (ctx: ToolCtx, a: any) => {
     const v = await vaultFor(ctx, a.vault, true);
     const n = await liveNote(v.id, a.note);
-    return { v, n, after: next(a, n.content, n.title) };
+    const after = next(a, n.content, n.title);
+    if (isCanvasPath(n.path) && !parseCanvas(after)) throw new HttpError(400, `“${n.title}” is a board (JSON Canvas): change it with rewrite_note and the whole board's JSON`);
+    return { v, n, after };
   };
   return {
     preview: async (ctx: ToolCtx, a: any): Promise<Preview> => {
@@ -295,6 +299,7 @@ export const TOOLS: Tool[] = [
         vault: v.name,
         path: n.path,
         title: n.title,
+        ...(isCanvasPath(n.path) ? { kind: "board (JSON Canvas: cards in nodes, arrows in edges)" } : {}),
         tags: n.tags,
         updated_at: n.updated_at,
         backlinks: back.map((b) => b.path),
@@ -344,7 +349,7 @@ export const TOOLS: Tool[] = [
     writes: true,
     run: async (ctx, a) => {
       const v = await vaultFor(ctx, a.vault, true);
-      const n = await notes.createNote(v.id, ctx.user.id, a.path, a.content);
+      const n = await notes.createNote(v.id, ctx.user.id, a.path, await notes.withNewId(v.id, a.path, a.content));
       return { vault: v.name, created: n.path, id: n.id };
     },
     preview: async (ctx, a) => {
@@ -371,7 +376,7 @@ export const TOOLS: Tool[] = [
         await noteFor(v.id, a.note);
       } catch (e) {
         if (!(a.create && e instanceof HttpError && e.status === 404)) throw e;
-        const created = await notes.createNote(v.id, ctx.user.id, a.note, ensureNewline(a.text));
+        const created = await notes.createNote(v.id, ctx.user.id, a.note, await notes.withNewId(v.id, a.note, ensureNewline(a.text)));
         return { vault: v.name, created: created.path, id: created.id };
       }
       await append.run(ctx, a);
@@ -387,6 +392,30 @@ export const TOOLS: Tool[] = [
         return { summary: createSummary(path), noteId: null, path, before: null, after: ensureNewline(a.text) };
       }
       return append.preview(ctx, a);
+    },
+  },
+  {
+    name: "add_journal_entry",
+    title: "Add a journal entry",
+    description:
+      "Write an entry in the person's journal: today's daily note in their home collection (or the collection named), under ## Journal with the time. Use it when they ask to journal, note how their day went, or add to today's journal. Safe while they're typing in today's note.",
+    input: z.object({
+      text: z.string().min(1).max(20_000).describe("The entry, in the person's own words where they gave them"),
+      day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("YYYY-MM-DD; today if left out"),
+      time: z.string().regex(/^\d{2}:\d{2}$/).optional().describe("HH:MM, 24-hour; now if left out"),
+      vault: z.union([z.number().int(), z.string()]).optional().describe("Leave out for the person's home collection"),
+    }),
+    writes: true,
+    run: async (ctx, a) => {
+      const vaultId = a.vault === undefined ? null : (await vaultFor(ctx, a.vault, true)).id;
+      const r = await journal.addEntry(ctx.user, { text: a.text, day: a.day, time: a.time, vaultId });
+      return { added_to: r.path, day: r.day, time: r.time };
+    },
+    preview: async (ctx, a) => {
+      const vaultId = a.vault === undefined ? null : (await vaultFor(ctx, a.vault, true)).id;
+      const p = await journal.planEntry(ctx.user, { text: a.text, day: a.day, time: a.time, vaultId });
+      const before = p.existing ? (await notes.getNote(p.vaultId, p.existing.id)).content : null;
+      return { summary: `Add a journal entry for ${p.day} at ${p.time}`, noteId: p.existing?.id ?? null, path: p.path, before, after: journal.addToJournal(before ?? "", p.time, p.text) };
     },
   },
   {
@@ -460,7 +489,7 @@ export const TOOLS: Tool[] = [
     writes: true,
     run: async (ctx, a) => {
       const p = await planSplit(ctx, a);
-      const created = await notes.createNote(p.v.id, ctx.user.id, p.path, p.body);
+      const created = await notes.createNote(p.v.id, ctx.user.id, p.path, await notes.withNewId(p.v.id, p.path, p.body));
       await notes.overwriteContent(
         p.n.id,
         (cur) => {

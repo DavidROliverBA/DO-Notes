@@ -7,17 +7,33 @@
 .standalone-vault {
   align-items: center;
 }
-.standalone-vault-name {
+.standalone-vault select {
+  min-width: 0;
+}
+/* The folders opened before, on the welcome screen: Reopen, with a quiet × to forget one. */
+.standalone-folders {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.standalone-folders li {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.standalone-folders li > button:first-child {
   flex: 1;
   min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 600;
-  padding: 6px 4px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+}
+.standalone-welcome .standalone-folders .icon-btn {
+  padding: 6px;
+}
+.standalone-welcome .row {
+  justify-content: center;
+  flex-wrap: wrap;
 }
 .standalone-foot {
   justify-content: space-between;

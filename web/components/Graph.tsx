@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type NoteSummary } from "../lib/api";
 import { activeFilters, BUSY, canShowMore, type DayRange, daySpan, type Filters, type GraphData, graphUrl, loadFilters, NO_FILTERS, outside, rangeFrom, saveFilters, type Scope, scopeFrom, shown } from "../lib/graph";
-import { navigate, noteUrl } from "../lib/router";
+import { currentPath, currentSearch, navigate, noteUrl, replaceQuietly } from "../lib/router";
 import { Icon } from "../ui/Icon";
 import { PanelToggle } from "../ui/PanelToggle";
 import { toastError } from "../ui/overlays";
@@ -48,9 +48,9 @@ export function useGraphData(vaultId: number, changed: unknown): GraphData | nul
 
 /** The page's ?query, kept up to date as the app navigates. */
 function useSearch(): string {
-  const [s, set] = useState(location.search);
+  const [s, set] = useState(currentSearch);
   useEffect(() => {
-    const on = () => set(location.search);
+    const on = () => set(currentSearch());
     window.addEventListener("cp:navigate", on);
     window.addEventListener("popstate", on);
     return () => (window.removeEventListener("cp:navigate", on), window.removeEventListener("popstate", on));
@@ -82,15 +82,15 @@ export function Graph(p: Props) {
   const [find, setFind] = useState("");
   const canvas = useRef<GraphHandle>(null);
   // The timeline: open with a range from the address (?from=&to=), or from the button.
-  const [range, setRangeState] = useState<DayRange | null>(() => rangeFrom(location.search));
+  const [range, setRangeState] = useState<DayRange | null>(() => rangeFrom(currentSearch()));
   const [hideOutside, setHideOutside] = useState(false);
   const [playing, setPlaying] = useState(false);
   const setRange = (r: DayRange | null) => {
     setRangeState(r);
-    const q = new URLSearchParams(location.search);
+    const q = new URLSearchParams(currentSearch());
     if (r) (q.set("from", r.from), q.set("to", r.to));
     else (q.delete("from"), q.delete("to"));
-    history.replaceState(history.state, "", `${location.pathname}${q.size ? `?${q}` : ""}`);
+    replaceQuietly(`${currentPath()}${q.size ? `?${q}` : ""}`);
   };
   const setFilters = (f: Filters) => (setFiltersState(f), saveFilters(p.vaultId, f));
 

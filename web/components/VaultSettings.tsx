@@ -2,6 +2,7 @@
 // GitHub collection sends its changes (F19), members and invitations, import, export, and leave or
 // delete.
 
+import { exportAixf } from "../lib/aixf";
 import { useEffect, useRef, useState } from "react";
 import { api, type Role, type User, type Vault } from "../lib/api";
 import { navigate } from "../lib/router";
@@ -29,7 +30,11 @@ interface Report {
   skipped: number;
   attachments: number;
   errors: { path: string; error: string }[];
+  typesAdded?: string[];
 }
+
+/** "System", "System and App", "System, App and Store". */
+const listed = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
 
 export function VaultSettings({ vault, user, onClose, onChanged }: { vault: Vault; user: User; onClose: () => void; onChanged: () => void }) {
   const isOwner = vault.role === "owner";
@@ -266,6 +271,7 @@ export function VaultSettings({ vault, user, onClose, onChanged }: { vault: Vaul
           {report && (
             <div className="report">
               Imported: {report.created} new, {report.updated} updated, {report.attachments} attachments, {report.skipped} skipped.
+              {report.typesAdded?.length ? ` Added the ${listed(report.typesAdded)} ${report.typesAdded.length === 1 ? "type" : "types"}, which the notes use.` : ""}
               {report.errors.length > 0 && (
                 <details>
                   <summary>{report.errors.length} problems</summary>
@@ -286,9 +292,26 @@ export function VaultSettings({ vault, user, onClose, onChanged }: { vault: Vaul
       <section className="settings-section">
         <h3>Export</h3>
         <p className="muted">Everything as plain markdown in a .zip — open it in any Markdown editor.</p>
-        <a className="button" href={`/api/vaults/${vault.id}/export`}>
-          Download collection (.zip)
-        </a>
+        <div className="row wrap">
+          <a className="button" href={`/api/vaults/${vault.id}/export`}>
+            Download collection (.zip)
+          </a>
+          {!vault.cloud && <button onClick={() => void exportAixf(vault.id, canWrite)}>Export as AI-XF bundle (.zip)</button>}
+        </div>
+        <p className="muted small">An AI-XF bundle is the same notes for Longview and other AI-XF tools: each with an id, relations as typed links, and a manifest.</p>
+        {isOwner && !vault.cloud && (
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={!!vault.note_ids}
+              onChange={(e) => {
+                const on = e.currentTarget.checked;
+                void run("Saving…", () => api(`/vaults/${vault.id}`, { method: "PATCH", body: { noteIds: on } }).then(onChanged), on ? "New notes get an id" : "New notes no longer get an id");
+              }}
+            />{" "}
+            Give new notes an id, which stays the same when they're renamed (for AI-XF bundles and links from other collections)
+          </label>
+        )}
       </section>
 
       <section className="settings-section danger-zone">

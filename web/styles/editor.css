@@ -139,6 +139,29 @@
 .live-preview .cm-lp-fence {
   color: var(--faint);
 }
+/* The code block's bar on its opening fence: language (a picker) and Copy. */
+.cm-lp-codebar {
+  float: right;
+  display: inline-flex;
+  gap: 4px;
+  font-family: var(--sans);
+}
+.cm-lp-codebar button {
+  font-size: var(--text-small);
+  padding: 0 8px;
+  background: none;
+  border: none;
+  color: var(--faint);
+  border-radius: var(--radius-sm);
+}
+.cm-lp-codebar button:hover:not(:disabled) {
+  background: var(--bg3);
+  color: var(--text);
+}
+/* A read-only note: the language is just a label. */
+.cm-content[contenteditable="false"] .cm-lp-codelang {
+  pointer-events: none;
+}
 .live-preview .cm-lp-highlight {
   background: var(--mark);
   border-radius: var(--radius-xs);
@@ -158,6 +181,21 @@
   font-weight: 650;
   color: var(--c);
   padding-top: 6px !important;
+}
+/* A folding callout's chevron (F28's Expand) */
+.live-preview .cm-lp-fold {
+  background: none;
+  border: none;
+  padding: 0;
+  width: 1em;
+  margin-right: 2px;
+  font: inherit;
+  color: var(--c, var(--accent));
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease);
+}
+.live-preview .cm-lp-fold.open {
+  transform: rotate(90deg);
 }
 .live-preview .cm-lp-bullet {
   color: var(--accent);
@@ -183,6 +221,7 @@
   vertical-align: middle;
 }
 .live-preview .cm-lp-image {
+  cursor: zoom-in;
   display: block;
   max-width: 100%;
   max-height: 480px;
@@ -353,9 +392,13 @@
   top: -1.3em !important;
 }
 
-/* Tables edited cell by cell (F8) */
+/* Tables edited cell by cell (F8). The table scrolls sideways by itself (markdown.css), so the
+   block doesn't clip: its bar floats above it. */
 .cm-table-edit {
   position: relative;
+}
+.live-preview .cm-lp-block.cm-table-edit {
+  overflow: visible;
 }
 .cm-table-edit td,
 .cm-table-edit th {
@@ -488,4 +531,144 @@
     padding-left: 52px;
     padding-right: 52px;
   }
+}
+
+/* Folding headings and lists (web/lib/folding.ts): a chevron after the line, shown on hover (on
+   the cursor's line on a phone) and while folded; the folded part as "⋯ 12 lines". */
+.cm-fold-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  color: var(--faint);
+  font-size: var(--text-ui);
+  font-weight: 400;
+  line-height: 1;
+  vertical-align: middle;
+  transform: rotate(90deg);
+  transition: transform var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
+  opacity: 0;
+}
+.cm-fold-chevron::before {
+  content: "›";
+}
+.cm-fold-chevron.folded {
+  transform: none;
+  opacity: 1;
+}
+.cm-foldable:hover .cm-fold-chevron,
+.cm-fold-chevron:focus-visible {
+  opacity: 1;
+}
+.cm-fold-chevron:hover {
+  background: var(--bg3);
+  color: var(--text);
+}
+@media (hover: none) {
+  .cm-fold-here .cm-fold-chevron {
+    opacity: 1;
+  }
+}
+.cm-fold-placeholder {
+  margin-left: 6px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--bg3);
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: var(--text-small);
+  font-weight: 400;
+  line-height: 1.6;
+  vertical-align: middle;
+}
+.cm-fold-placeholder:hover {
+  color: var(--text);
+}
+
+/* The format toolbar over selected text (web/lib/selectionToolbar.ts), laptops only. */
+.cm-tooltip:has(> .cm-format-bar) {
+  border: none;
+  background: none;
+}
+.cm-format-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  margin-bottom: 6px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  font-family: var(--sans);
+}
+.cm-format-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: var(--text-ui);
+  line-height: 1;
+}
+.cm-format-btn:hover {
+  background: var(--bg3);
+  color: var(--text);
+}
+.cm-format-btn[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.cm-format-btn.b {
+  font-weight: 700;
+}
+.cm-format-btn.i {
+  font-style: italic;
+}
+.cm-format-btn.s {
+  text-decoration: line-through;
+}
+.cm-format-btn.hl {
+  background: var(--mark);
+  color: var(--text);
+  height: 20px;
+  min-width: 20px;
+  margin: 0 4px;
+  padding: 0 4px;
+}
+.cm-format-btn.colour {
+  text-decoration: underline 2px var(--tc-red);
+  text-underline-offset: 3px;
+  font-weight: 600;
+}
+.cm-format-btn.heading {
+  font-weight: 650;
+  border-right: 1px solid var(--line);
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  margin-right: 2px;
+}
+
+/* Floe's part of a note (F41): the markers drawn as a quiet label and a rule */
+.cm-floe-mark {
+  font-size: var(--text-ui-sm);
+  color: var(--muted);
+}
+.cm-floe-start {
+  padding: 2px 0 4px;
+}
+.cm-floe-end {
+  border-top: 1px solid var(--line);
+  margin: 4px 0;
 }

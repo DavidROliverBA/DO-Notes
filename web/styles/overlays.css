@@ -123,11 +123,181 @@
 .settings-section {
   margin-bottom: 22px;
 }
+/* Settings → Account → Reminders (F35): the time keeps its width and moves under its label on a phone. */
+.settings-section input[type="time"] {
+  min-width: 140px;
+  flex: 0 0 auto;
+}
 .settings-section h3 {
   margin: 0 0 8px;
   font-size: var(--text-ui);
 }
+/* Settings → Connections → Connected services (F33): adding a known service, and Review. */
+.connection-add {
+  margin-top: 14px;
+}
+.connection-add h4 {
+  margin: 0 0 4px;
+  font-size: var(--text-ui);
+}
+/* Send to Longview (F30 step 4), under the Longview connection. */
+.longview-send {
+  margin: 6px 0 0;
+  font-size: var(--text-ui-sm);
+}
+.longview-send summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+.longview-send .row {
+  margin-top: 6px;
+}
+.connection-list .notice {
+  margin: 6px 0 0;
+}
+.tool-group {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 8px 12px 10px;
+  margin: 0 0 12px;
+}
+.tool-group legend {
+  font-weight: 600;
+  padding: 0 4px;
+}
+.tool-row {
+  display: flex;
+  width: 100%;
+  color: var(--text);
+  font-size: var(--text-ui);
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 0;
+}
+.tool-row > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tool-row.off {
+  color: var(--muted);
+}
+.tool-changed {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-left: 3px solid var(--accent);
+  padding-left: 8px;
+  margin-top: 4px;
+}
+/* Notifications (F39): the bell's count, and the list with what's unread in bold. */
+.icon-btn.bell {
+  position: relative;
+}
+.bell-count {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: var(--text-small);
+  line-height: 15px;
+  text-align: center;
+}
+.notification-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+}
+.notification-list button {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 8px 6px;
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  white-space: normal;
+}
+.notification-list button:hover {
+  background: var(--bg3);
+}
+.notification-list .unread button {
+  color: var(--text);
+  font-weight: 600;
+}
+.notification-text {
+  flex: 1;
+}
+.notification-list small {
+  color: var(--faint);
+  white-space: nowrap;
+}
+.notifications .activity h3 {
+  font-size: var(--text-ui-sm);
+  color: var(--muted);
+  margin: 8px 0 4px;
+}
+/* Add a connection (F33 step 2): the steps, the no-sign-in warning, and Review's Try it. */
+.add-service {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.add-service label:not(.check) {
+  font-weight: 600;
+}
+.add-service p {
+  margin: 0;
+}
+.notice.warning {
+  border-left: 3px solid var(--warn);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tool-tried pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 180px;
+  overflow: auto;
+  font-size: var(--text-small);
+  background: var(--bg2);
+  padding: 8px;
+  border-radius: var(--radius-md);
+  margin: 4px 0 0;
+}
+/* Settings → Account → Passkeys (F32): one row per passkey, with Remove. */
+.passkey-list {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+}
+.passkey-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+.passkey-name {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
 .settings-section p {
+  font-size: var(--text-ui-sm);
+}
+.settings-section h4 {
+  margin: 16px 0 4px;
   font-size: var(--text-ui-sm);
 }
 .members li {
@@ -580,6 +750,11 @@
   }
 }
 
+/* A status colour (F28): its tint, as the label shows it */
+.swatch-dot.status-swatch {
+  background: color-mix(in srgb, var(--c, var(--muted)) 30%, transparent);
+}
+
 /* Colour swatches in the chooser (F10) */
 .swatch-dot {
   display: inline-flex;
@@ -615,6 +790,48 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+}
+/* Signing the Mac in to the cloud library (F23, web/components/CloudLibrary.tsx). */
+.cloud-connect {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+}
+.cloud-connect label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--text-ui-sm);
+}
+.cloud-connect input[type="url"] {
+  min-width: 260px;
+}
+
+/* Kept in a folder on the Mac (F22, web/components/FolderSetup.tsx). */
+.folder-kept {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.folder-kept code {
+  overflow-wrap: anywhere;
+}
+.folder-kept [role="status"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.folder-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.folder-kept .changes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 .setup h4 {
   margin: 0 0 4px;
@@ -682,4 +899,286 @@
     grid-row: auto;
     justify-self: start;
   }
+}
+
+/* A picture on its own (web/ui/lightbox.ts): as large as fits, on the scrim. */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
+  background: var(--scrim);
+  backdrop-filter: blur(6px);
+  cursor: zoom-out;
+}
+.lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  background: var(--bg);
+}
+.lightbox-close {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  right: 12px;
+  min-width: var(--tap);
+  min-height: var(--tap);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-display);
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Hover preview of a linked note (web/lib/hoverPreview.ts): in the editor a CodeMirror tooltip,
+   in reading view a floating box; the same card either way. */
+.hover-preview {
+  width: min(420px, calc(100vw - 32px));
+  max-height: 320px;
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  font-family: var(--sans);
+  color: var(--text);
+}
+.cm-tooltip:has(> .hover-preview) {
+  border: none;
+  background: none;
+}
+.hover-preview.floating {
+  position: fixed;
+  z-index: var(--z-menu);
+}
+.hover-preview-title {
+  padding: 10px 14px 0;
+  font-size: var(--text-small);
+  font-weight: 600;
+  color: var(--muted);
+}
+.hover-preview-text.markdown {
+  padding: 4px 14px 12px;
+  font-size: var(--text-ui);
+  line-height: 1.55;
+  max-height: 290px;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, var(--text) 80%, transparent);
+  mask-image: linear-gradient(to bottom, var(--text) 80%, transparent);
+}
+.hover-preview-text.markdown > * {
+  max-width: none;
+}
+.hover-preview-text.markdown h1 {
+  font-size: 1.2em;
+  margin-top: 0.4em;
+}
+.hover-preview-text.markdown h2,
+.hover-preview-text.markdown h3 {
+  font-size: 1.05em;
+}
+.hover-preview-text.markdown img {
+  max-height: 120px;
+}
+.hover-preview-more {
+  color: var(--faint);
+}
+
+/* The guided tour (web/ui/Tour.tsx): the page dimmed except round the step's target, and a card
+   beside it. */
+.tour-block {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+}
+.tour-dim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: var(--scrim);
+  pointer-events: none;
+}
+.tour-spot {
+  position: fixed;
+  z-index: var(--z-modal);
+  border-radius: var(--radius);
+  box-shadow: 0 0 0 2px var(--accent), 0 0 0 9999px var(--scrim);
+  pointer-events: none;
+  transition: left var(--dur) var(--ease), top var(--dur) var(--ease), width var(--dur) var(--ease), height var(--dur) var(--ease);
+}
+.tour-card {
+  position: fixed;
+  z-index: var(--z-modal);
+  width: min(340px, calc(100vw - 32px));
+  padding: 16px 18px 14px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+}
+.tour-count {
+  font-size: var(--text-small);
+  color: var(--faint);
+}
+.tour-title {
+  margin: 2px 0 6px;
+  font-size: var(--text-title);
+}
+.tour-body {
+  margin: 0 0 14px;
+  font-size: var(--text-ui);
+  line-height: 1.5;
+  color: var(--muted);
+}
+.tour-body b {
+  color: var(--text);
+}
+.tour-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tour-gap {
+  flex: 1;
+}
+/* The offer on the home page */
+.tour-offer-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  margin-bottom: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+}
+.tour-offer-card p {
+  flex: 1;
+  min-width: 200px;
+  margin: 0;
+}
+.tour-offer-card > svg {
+  color: var(--accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .tour-spot {
+    transition: none;
+  }
+}
+
+/* the relationship builder (F31): one sentence of three boxes, each filtering a list */
+.rel-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.rel-sentence {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.rel-said {
+  margin: 0;
+  font-weight: 600;
+}
+.rel-meaning {
+  margin: 0;
+}
+.rel-builder .dialog-actions .spacer {
+  flex: 1;
+}
+.combo {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.combo-label {
+  font-size: var(--text-small);
+  color: var(--muted);
+}
+.combo input {
+  width: 100%;
+  min-height: 32px;
+}
+/* In the flow under its box, not floating: a dialog's scrolling would clip a floating list. */
+.combo-list {
+  margin-top: 4px;
+  padding: 4px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow);
+  max-height: min(40vh, 280px);
+}
+.combo-list li {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+.combo-list li small {
+  flex-basis: 100%;
+  white-space: normal;
+}
+.rel-sentence {
+  align-items: start;
+}
+@media (max-width: 640px) {
+  .rel-sentence {
+    grid-template-columns: 1fr;
+  }
+}
+@media (pointer: coarse) {
+  .combo input {
+    min-height: var(--tap);
+  }
+}
+/* Settings → Account → Two-step sign-in (F40): the QR code beside the steps, and the recovery
+   codes in two columns. */
+.two-step-setup {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.two-step-setup img {
+  border-radius: var(--radius-md);
+  flex: none;
+}
+.two-step-setup > div {
+  flex: 1;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.two-step-setup p {
+  margin: 0;
+}
+.two-step-setup .secret {
+  font-family: var(--mono);
+  word-spacing: 0.2em;
+  user-select: all;
+}
+.recovery {
+  background: var(--bg2);
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+.recovery-codes {
+  columns: 2;
+  margin: 8px 0 12px;
+  padding-left: 24px;
+  font-family: var(--mono);
+  font-size: var(--text-ui);
+}
+.recovery-codes li {
+  padding: 2px 0;
+  user-select: all;
 }

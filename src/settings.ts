@@ -14,6 +14,11 @@ function bool(v: string | undefined, fallback: boolean): boolean {
 export const generatedSetupToken = process.env.SETUP_TOKEN === undefined && process.env.NODE_ENV === "production" ? randomBytes(18).toString("base64url") : "";
 
 export const settings = {
+  /** New collections give their new notes an AI-XF id (F9). Off only in tests of exact note text. */
+  aixfIds: process.env.AIXF_IDS !== "false",
+  /** The iPhone app (ios/) as `TEAMID.bundle.id`, comma-separated: when set, the server says the
+   *  app may open its links and fill its passwords (src/iosApp.ts). Unset = no app is claimed. */
+  appleAppIds: (process.env.APPLE_APP_IDS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
   databaseUrl: process.env.DATABASE_URL ?? "postgres://commonplace:commonplace@localhost:5434/commonplace",
   port: Number(process.env.PORT ?? 3000),
   /** Off unless set: the first account is always allowed, and after that an admin adds people. */
@@ -47,6 +52,22 @@ export const settings = {
   gitTickMs: Number(process.env.GIT_TICK_MS ?? 60_000),
   /** Brave Search's API, for the assistant's web search; a fake one in tests. */
   braveApi: (process.env.BRAVE_API_URL?.trim() || "https://api.search.brave.com/res/v1").replace(/\/+$/, ""),
+  /** Recall's MCP server (F30): the address the Recall connection signs in to and calls. */
+  recallMcp: process.env.RECALL_MCP_URL?.trim() || "https://backend.getrecall.ai/mcp/",
+  /** Floe's MCP address, for the Floe preset (F33); empty: the person gives it when connecting. */
+  floeMcp: process.env.FLOE_MCP_URL ?? "",
+  /** Connections (Longview, Recall) to private addresses: tests and a kit on the same Mac only. */
+  connectionsAllowLocal: process.env.CONNECTIONS_ALLOW_LOCAL === "true",
   gitIdleMs: Number(process.env.GIT_IDLE_MS ?? 120_000),
   maxImportBytes: Number(process.env.MAX_IMPORT_MB ?? 200) * 1024 * 1024,
+  /** F22: the folder (inside the container, the laptop kit mounts COMMONPLACE_FOLDERS there)
+   *  that folder vaults live under. Unset = no folder vaults on this server (the cloud). */
+  foldersRoot: (process.env.FOLDERS_ROOT?.trim() ?? "").replace(/\/+$/, ""),
+  /** How FOLDERS_ROOT is shown to people: the Mac path it was mounted from ("~/Notes"). */
+  foldersLabel: process.env.FOLDERS_LABEL?.trim() || process.env.FOLDERS_ROOT?.trim() || "",
+  /** F22: how often every folder vault is rescanned, besides file events (which a Docker mount
+   *  doesn't always pass on). Shorter in tests. */
+  folderScanMs: Number(process.env.FOLDER_SCAN_MS ?? 30_000),
+  /** F23: this server (the Mac's) can sign in to a cloud library and show its collections. */
+  cloudLink: process.env.CLOUD_LINK === "true",
 };

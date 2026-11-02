@@ -1,0 +1,6 @@
+#include "Base.xcconfig"
+// Your live server (LIVE_HOST, from Local.xcconfig): what's installed on the iPhone and sent to
+// TestFlight.
+SERVER_SCHEME = https
+SERVER_HOST = $(LIVE_HOST)
+SERVER_DOMAIN = $(LIVE_HOST)

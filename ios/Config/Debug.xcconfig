@@ -1,0 +1,6 @@
+#include "Base.xcconfig"
+// The Mac's laptop kit (laptop/README.md), for the simulator. `//` starts a comment in an
+// xcconfig, so the address is in parts: Info.plist puts them together.
+SERVER_SCHEME = http
+SERVER_HOST = localhost:8070
+SERVER_DOMAIN = localhost

@@ -5,8 +5,9 @@ COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production
 COPY . .
 ENV NODE_ENV=production
-# The server writes nothing to disk (data lives in Postgres), so it runs as the image's unprivileged
-# `bun` user; the app's files stay root-owned and read-only to it.
+# The server writes nothing to disk (data lives in Postgres) except inside FOLDERS_ROOT, the folder
+# the laptop kit mounts for folder collections (F22), so it runs as the image's unprivileged `bun`
+# user; the app's files stay root-owned and read-only to it.
 USER bun
 EXPOSE 3000
 # Migrations run at boot (idempotent), then the HTTP + WebSocket server.

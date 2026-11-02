@@ -4,7 +4,7 @@ standalone: true
 ---
 # Help
 
-Commonplace is a Markdown notebook. Every note is a plain `.md` file, so your notes always open in other Markdown editors, and nothing is locked in.
+DO Notes is a Markdown notebook. Every note is a plain `.md` file, so your notes always open in other Markdown editors, and nothing is locked in.
 
 ## Three ways to use it
 
@@ -27,17 +27,21 @@ flowchart TB
 | [Writing notes](writing.md) | Live Preview, formatting, the `/` menu, tables, pictures |
 | [Links and embeds](links.md) | `[[Links]]`, backlinks, notes inside notes |
 | [The graph](graph.md) | Notes and links by type, around one note, filters and parts of the collection |
+| [Boards](boards.md) | Notes as cards on a whiteboard, joined by arrows (`.canvas`) |
 | [Organising notes](organising.md) | Folders, tags, bookmarks, Trash and version history |
 | [Properties and types](types.md) | Properties, and types such as Person, Meeting and Book |
 | [Tasks and daily notes](tasks.md) | Every to-do in one place, and a note for each day |
+| [The journal](journal.md) | Entries in your daily notes, the journal page and On this day |
 | [Finding things](search.md) | Search, the quick switcher and the command list |
 | [Queries and diagrams](queries.md) | Dataview queries and Mermaid diagrams |
 | [Sharing and live editing](sharing.md) | Members, roles and editing together |
 | [AI assistants](ai.md) | Bring your own AI, and connecting Claude |
 | [Publish a website](website.md) | Turning a collection into a website |
+| [Folders on your Mac](mac-folders.md) | A collection kept in a folder of Markdown, in step with other editors |
 | [Import, export and GitHub](import-export.md) | Moving notes in and out, backups, GitHub collections |
-| [On the iPhone](iphone.md) | The home-screen app, offline use and sharing from other apps |
-| [The standalone file](standalone.md) | Commonplace in one file, with no server |
+| [The Mac app](mac-app.md) | DO Notes in windows of its own, the cloud or the kit, and sharing from other apps |
+| [On the iPhone](iphone.md) | The iPhone app, the home-screen app, offline use and sharing from other apps |
+| [The standalone file](standalone.md) | DO Notes in one file, with no server |
 | [Keyboard shortcuts](shortcuts.md) | Every shortcut |
 | [Settings](settings.md) | What each section of Settings does |
 

@@ -308,7 +308,7 @@ marked.use({
       level: "inline",
       start: (src: string) => src.match(/!?\[\[/)?.index,
       tokenizer(src: string) {
-        const m = /^(!?)\[\[([^\[\]|\n]+?)(?:\|([^\[\]\n]*))?\]\]/.exec(src);
+        const m = /^(!?)\[\[([^\[\]|\n]+?)(?:\\?\|([^\[\]\n]*))?\]\]/.exec(src);
         if (m) return { type: "wikilink", raw: m[0], target: m[2]!.trim(), alias: m[3]?.trim() };
       },
       renderer(t: any) {

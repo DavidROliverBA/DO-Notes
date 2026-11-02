@@ -91,6 +91,26 @@ export async function search(vaultId: number, q: string, limit = 30): Promise<{ 
     order by similarity(lower(n.title), ${text.toLowerCase()}) desc
     limit 20`;
 
+  // The words inside files (src/fileText.ts: PDFs, photos, voice notes): a match finds the notes
+  // that show or link the file, with "In <file>:" and the words around it.
+  const inFiles = (
+    await sql`
+    with files as (
+      select a.path, a.text, ts_rank_cd(a.text_search, websearch_to_tsquery('english', ${text})) as rank
+      from attachments a
+      where a.vault_id = ${vaultId} and a.text_search @@ websearch_to_tsquery('english', ${text})
+      order by rank desc limit 10
+    )
+    select distinct on (n.id) n.id, n.path, n.title, f.path as file, f.rank,
+      ts_headline('english', replace(replace(replace(f.text, '&', '&amp;'), '<', '&lt;'), '>', '&gt;'), websearch_to_tsquery('english', ${text}),
+        'MaxFragments=1, MaxWords=18, MinWords=6, StartSel=<mark>, StopSel=</mark>') as snippet
+    from files f join notes n on n.vault_id = ${vaultId} and strpos(lower(n.content), lower(regexp_replace(f.path, '^.*/', ''))) > 0
+    where true ${tagFilter} ${pathFilter}
+    order by n.id, f.rank desc`
+  )
+    .sort((a: any, b: any) => b.rank - a.rank)
+    .map((r: any) => ({ ...r, snippet: `In ${escapeHtml(String(r.file).split("/").pop()!)}: ${r.snippet}` }));
+
   let semantic: any[] = [];
   let usedSemantic = false;
   if (semanticEnabled()) {
@@ -134,6 +154,7 @@ export async function search(vaultId: number, q: string, limit = 30): Promise<{ 
   };
   add(titles, "title", 1.2);
   add(keyword, "keyword", 1);
+  add(inFiles, "keyword", 0.9);
   add(semantic, "semantic", 1);
   const hits = [...fused.values()].sort((a, b) => b.score - a.score).slice(0, limit);
   return { hits, semantic: usedSemantic };

@@ -19,7 +19,7 @@ export function Assistants() {
 
   // The key goes with it and can't come back, so this one asks first.
   async function remove(a: Assistant) {
-    if (!(await confirmDialog({ title: `Remove ${a.name}?`, message: "Its API key is deleted from Commonplace. To use it again you'd add it with the key.", action: "Remove", danger: true }))) return;
+    if (!(await confirmDialog({ title: `Remove ${a.name}?`, message: "Its API key is deleted from DO Notes. To use it again you'd add it with the key.", action: "Remove", danger: true }))) return;
     try {
       await api(`/me/assistants/${a.id}`, { method: "DELETE" });
       await loadAssistants(true);

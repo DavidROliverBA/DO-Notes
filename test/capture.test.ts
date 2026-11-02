@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import { appendEntries, entryFor, linkFor, plan } from "../src/capture";
 
-const shared = (o: Partial<Parameters<typeof plan>[0]>) => ({ files: [], texts: [], urls: [], title: "", ...o });
+const shared = (o: Partial<Parameters<typeof plan>[0]>) => ({ files: [], fileTexts: [], texts: [], urls: [], title: "", ...o });
 
 describe("capture", () => {
   test("a bare link becomes a titled link; without a title, its address names it", () => {

@@ -54,6 +54,96 @@
 .link-list .unresolved {
   color: var(--muted);
 }
+/* Comments (L3): threads in the side panel; their words marked in the note. */
+.comment-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.comment-thread {
+  border-left: 3px solid var(--warn);
+  padding: 4px 0 4px 8px;
+  margin: 0 0 12px;
+}
+.comment-thread.resolved {
+  border-left-color: var(--line);
+  opacity: 0.8;
+}
+.comment-thread blockquote {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: var(--text-ui-sm);
+  font-style: italic;
+}
+.comment-head {
+  margin: 4px 0 0;
+  font-size: var(--text-ui-sm);
+}
+.comment-head small {
+  color: var(--faint);
+}
+.comment-body {
+  margin: 2px 0 4px;
+  font-size: var(--text-ui);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.comments details summary {
+  font-size: var(--text-ui-sm);
+  color: var(--muted);
+  cursor: pointer;
+}
+.cm-commented {
+  background: color-mix(in srgb, var(--warn) 22%, transparent);
+  border-bottom: 2px solid var(--warn);
+}
+/* From your connections (F33 step 4): one foldable group per service, its finds as links out. */
+.from-connections summary {
+  font-size: var(--text-ui-sm);
+  font-weight: 600;
+  color: var(--muted);
+  margin: 8px 0 2px;
+  cursor: pointer;
+}
+.from-connections .link-list a,
+.from-connections .link-list span {
+  display: flex;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-ui);
+  color: var(--text);
+  text-decoration: none;
+}
+.from-connections .link-list a:hover {
+  background: var(--bg3);
+}
+/* Relationships (F31): one group per kind and direction, each row the other note and its ⋯. */
+.rel-group h4 {
+  font-size: var(--text-ui-sm);
+  font-weight: 600;
+  color: var(--muted);
+  margin: 8px 0 2px;
+}
+.rel-rows li {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.rel-rows li > button:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.rel-rows .menu-button {
+  flex: none;
+  width: auto;
+  padding: 4px;
+  min-width: 24px;
+  min-height: 24px;
+}
+.relationships .rel-add {
+  margin-top: 6px;
+}
 
 /* ── vault home / graph ─────────────────────────────────────────────────────────── */
 .vault-home-body {

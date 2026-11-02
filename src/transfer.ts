@@ -3,11 +3,18 @@
 // (or a folder of .md files picked in the browser) imports straight back in. Also here: saving an
 // uploaded file as an attachment, and the streamed all-vaults backup (GET /api/backup).
 
+import { readPdfLater } from "./fileText";
+import { commentsMarkdown, listComments } from "./comments";
 import { strFromU8, strToU8, unzipSync, Zip, ZipDeflate, ZipPassThrough, zipSync } from "fflate";
 import { HttpError } from "./auth";
 import { sql } from "./db";
 import { emit } from "./events";
-import { isAttachmentPath, normalisePath, SITE_SETTINGS } from "./markdown";
+import { isAttachmentPath, normalisePath, parseFrontmatter, SITE_SETTINGS } from "./markdown";
+import { isTypePath, STARTERS, starterNeeds, starterNote, typeOf, TYPES_FOLDER } from "./types";
+import { isNotePath } from "./syncCore";
+import { type BundleImport, isBundle, MANIFEST as BUNDLE_MANIFEST, readBundle } from "./aixfImport";
+import { addKinds } from "./relationshipIndex";
+import { RELATIONSHIPS_NOTE } from "./relationships";
 import { createNote, findByPath, freeNotePath, overwriteContent } from "./notes";
 import { assertRoom } from "./storage";
 
@@ -19,6 +26,10 @@ export interface ImportReport {
   skipped: number;
   attachments: number;
   errors: { path: string; error: string }[];
+  /** When it was an AI-XF bundle (F9): what became of its concepts and typed links. */
+  aixf?: BundleImport;
+  /** Starter types added because imported notes said they were one (`type: system`). */
+  typesAdded?: string[];
 }
 
 const MAX_ATTACHMENT = 25 * 1024 * 1024;
@@ -50,8 +61,10 @@ export async function saveAttachment(vaultId: number, userId: number, file: File
   for (let i = 1; (await sql`select 1 from attachments where vault_id = ${vaultId} and path = ${path}`).length; i++) {
     path = path.replace(/( \d+)?(\.[^.]+)$/, ` ${i}$2`);
   }
+  const bytes = new Uint8Array(await file.arrayBuffer());
   await sql`insert into attachments (vault_id, path, mime, size, data, created_by)
-            values (${vaultId}, ${path}, ${mimeFor(path)}, ${file.size}, ${new Uint8Array(await file.arrayBuffer())}, ${userId})`;
+            values (${vaultId}, ${path}, ${mimeFor(path)}, ${file.size}, ${bytes}, ${userId})`;
+  readPdfLater(vaultId, path, bytes);
   return path;
 }
 
@@ -94,7 +107,7 @@ export async function importFiles(
             dirs.push(e.name.replace(/\\/g, "/").replace(/^\/+|\/+$/g, ""));
             return false;
           }
-          const limit = /\.(md|markdown)$/i.test(e.name) ? MAX_NOTE : MAX_ATTACHMENT;
+          const limit = isNotePath(e.name) ? MAX_NOTE : MAX_ATTACHMENT;
           if (e.originalSize > limit) {
             tooBig.push(e.name);
             return false;
@@ -115,17 +128,32 @@ export async function importFiles(
   const prefix = intoFolder.trim() ? normalisePath(intoFolder, null) + "/" : "";
 
   const report: ImportReport = { created: 0, updated: 0, skipped: 0, attachments: 0, errors: tooBig.map((path) => ({ path, error: "too large to import" })) };
+  // An AI-XF bundle (F9): typed links become relation properties; the manifest is kept as the
+  // collection's own if it has none; the vocabularies were only for the trip.
+  const bundle = isBundle(items) ? readBundle(items, prefix) : null;
+  if (bundle) {
+    report.aixf = bundle.report;
+    const manifest = items.find((f) => f.path === BUNDLE_MANIFEST)!;
+    items = items.filter((f) => f !== manifest && !/^vocab\/[^/]+\.json$/.test(f.path));
+    await sql`insert into attachments (vault_id, path, mime, size, data, created_by)
+              values (${vaultId}, ${BUNDLE_MANIFEST}, ${"application/yaml"}, ${manifest.data.byteLength}, ${manifest.data}, ${userId})
+              on conflict (vault_id, path) do nothing`;
+  }
   let done = 0;
+  const typesNamed = new Set<string>();
   for (const f of items) {
     // A big import grows the tables many times over while it runs; refresh Postgres's statistics
     // as it goes, or the plans made when the vault was nearly empty (scans) make it quadratic.
     if (++done % 1000 === 0) await sql`analyze notes, links, attachments`;
     try {
-      if (/\.(md|markdown)$/i.test(f.path)) {
+      if (isNotePath(f.path)) {
         const path = normalisePath(prefix + f.path.replace(/\.markdown$/i, ".md"));
         // Some editors write CRLF on Windows and sometimes a BOM; store clean LF text.
         if (f.data.byteLength > MAX_NOTE) throw new Error("larger than 5 MB");
-        const content = strFromU8(f.data).replace(/^﻿/, "").replace(/\r\n/g, "\n");
+        const text = strFromU8(f.data).replace(/^﻿/, "").replace(/\r\n/g, "\n");
+        const content = bundle ? bundle.convert(f.path, text) : text;
+        const named = typeOf(parseFrontmatter(content).data);
+        if (named) typesNamed.add(named.toLowerCase());
         const existing = await findByPath(vaultId, path);
         if (!existing) {
           await createNote(vaultId, userId, path, content);
@@ -166,6 +194,27 @@ export async function importFiles(
       report.errors.push({ path: f.path, error: (err as Error).message });
     }
   }
+  if (bundle) {
+    const have = new Set((await sql`select title from notes where vault_id = ${vaultId} and path ilike 'Types/%'`).map((r) => r.title as string));
+    for (const t of bundle.missingTypes(have)) {
+      try {
+        await createNote(vaultId, userId, `Types/${t.name}.md`, t.content);
+        report.created++;
+      } catch (err) {
+        report.errors.push({ path: `Types/${t.name}.md`, error: (err as Error).message });
+      }
+    }
+    // Its kinds of relationship join the collection's Relationships note (F31).
+    try {
+      await addKinds(vaultId, userId, bundle.relKinds);
+    } catch (err) {
+      report.errors.push({ path: RELATIONSHIPS_NOTE, error: (err as Error).message });
+    }
+  }
+  if (!bundle && typesNamed.size) {
+    const added = await addNamedStarters(vaultId, userId, typesNamed, report);
+    if (added.length) report.typesAdded = added;
+  }
   // Empty folders from the zip; folders that received notes are already implied by their paths.
   const folders = dirs
     .map((d) => (root ? (d === root ? "" : d.startsWith(root + "/") ? d.slice(root.length + 1) : d) : d))
@@ -184,13 +233,49 @@ export async function importFiles(
   return report;
 }
 
+/** Notes that say `type: system` get the System starter type if the collection has no System
+ *  type yet (a Floe export, say), with the starters its relations need. Types the collection has,
+ *  including ones this import brought, are left alone, and a name that isn't a starter stays plain.
+ *  With `dryRun`, only says which it would add (F41's preview). */
+export async function addNamedStarters(vaultId: number, userId: number, named: Set<string>, report: Pick<ImportReport, "created" | "errors">, dryRun = false): Promise<string[]> {
+  const rows = await sql`select path from notes where vault_id = ${vaultId} and path ilike ${TYPES_FOLDER + "/%"}`;
+  const have = new Set(rows.map((r) => r.path as string).filter(isTypePath).map((p) => p.slice(TYPES_FOLDER.length + 1, -3).toLowerCase()));
+  const added: string[] = [];
+  const add = async (name: string) => {
+    const s = STARTERS.find((x) => x.name.toLowerCase() === name.toLowerCase());
+    if (!s || have.has(s.name.toLowerCase())) return;
+    have.add(s.name.toLowerCase());
+    if (dryRun) {
+      added.push(s.name);
+      for (const need of starterNeeds(s)) await add(need);
+      return;
+    }
+    try {
+      await createNote(vaultId, userId, `${TYPES_FOLDER}/${s.name}.md`, starterNote(s));
+      report.created++;
+      added.push(s.name);
+    } catch (err) {
+      report.errors.push({ path: `${TYPES_FOLDER}/${s.name}.md`, error: (err as Error).message });
+      return;
+    }
+    for (const need of starterNeeds(s)) await add(need);
+  };
+  for (const n of named) await add(n);
+  return added;
+}
+
 /** The whole vault (or one folder of it) as a zip of plain, portable Markdown. */
 export async function exportZip(vaultId: number, folder?: string): Promise<Uint8Array> {
-  return zipTree(await exportTree(vaultId, folder));
+  const tree = await exportTree(vaultId, folder);
+  // Comments (L3) go beside the notes, in a dot-folder other editors (and an import here) leave alone.
+  const prefix = folder ? normalisePath(folder, null) + "/" : "";
+  const commented = await sql`select distinct n.id, n.path, n.title from comments c join notes n on n.id = c.note_id where n.vault_id = ${vaultId} and n.path like ${prefix.replace(/[%_\\]/g, "\\$&") + "%"}`;
+  for (const n of commented) tree[`.comments/${n.path.slice(prefix.length)}`] = strToU8(commentsMarkdown(n.title, await listComments(vaultId, Number(n.id))));
+  return zipTree(tree);
 }
 
 /** A vault (or one folder) as {zip path: bytes}: notes as markdown, files, empty folders as "dir/". */
-async function exportTree(vaultId: number, folder?: string): Promise<Record<string, Uint8Array>> {
+export async function exportTree(vaultId: number, folder?: string): Promise<Record<string, Uint8Array>> {
   const prefix = folder ? normalisePath(folder, null) + "/" : "";
   const like = prefix.replace(/[%_\\]/g, "\\$&") + "%";
   const notes = await sql`select path, content from notes where vault_id = ${vaultId} and path like ${like}`;
@@ -277,7 +362,12 @@ export function backupStream(): ReadableStream<Uint8Array> {
               }
               await drained();
             }
-            json.push(strToU8(`],"trash":[`));
+            json.push(strToU8(`],"comments":`));
+            const cm = await sql`
+              select n.path, c.id, c.parent_id, u.email as author, c.quote, c.anchor_from, c.anchor_to, c.body, c.created_at, c.edited_at, c.resolved_at
+              from comments c join notes n on n.id = c.note_id left join users u on u.id = c.author_id where c.vault_id = ${v.id} order by c.id`;
+            json.push(strToU8(JSON.stringify(cm)));
+            json.push(strToU8(`,"trash":[`));
             first = true;
             for await (const rows of sql`select path, content, revisions, created_at, deleted_at from trashed_notes where vault_id = ${v.id} order by deleted_at`.cursor(20)) {
               for (const t of rows) {

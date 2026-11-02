@@ -15,11 +15,15 @@ import graph from "../../docs/help/graph.md" with { type: "text" };
 import organising from "../../docs/help/organising.md" with { type: "text" };
 import types from "../../docs/help/types.md" with { type: "text" };
 import tasks from "../../docs/help/tasks.md" with { type: "text" };
+import journal from "../../docs/help/journal.md" with { type: "text" };
 import search from "../../docs/help/search.md" with { type: "text" };
 import queries from "../../docs/help/queries.md" with { type: "text" };
 import sharing from "../../docs/help/sharing.md" with { type: "text" };
 import ai from "../../docs/help/ai.md" with { type: "text" };
 import website from "../../docs/help/website.md" with { type: "text" };
+import macFolders from "../../docs/help/mac-folders.md" with { type: "text" };
+import macApp from "../../docs/help/mac-app.md" with { type: "text" };
+import boards from "../../docs/help/boards.md" with { type: "text" };
 import importExport from "../../docs/help/import-export.md" with { type: "text" };
 import iphone from "../../docs/help/iphone.md" with { type: "text" };
 import standalone from "../../docs/help/standalone.md" with { type: "text" };
@@ -46,14 +50,18 @@ export const ALL_HELP_PAGES: HelpPage[] = (
   ["writing", writing],
   ["links", links],
   ["graph", graph],
+  ["boards", boards],
   ["organising", organising],
   ["types", types],
   ["tasks", tasks],
+  ["journal", journal],
   ["search", search],
   ["queries", queries],
   ["sharing", sharing],
   ["ai", ai],
   ["website", website],
+  ["mac-folders", macFolders],
+  ["mac-app", macApp],
   ["import-export", importExport],
   ["iphone", iphone],
   ["standalone", standalone],
@@ -99,4 +107,10 @@ export function useHelp(): string | null {
     (f) => (listeners.add(f), () => void listeners.delete(f)),
     () => open,
   );
+}
+
+/** The guided tour's buttons at the top of Help: set by the app (the standalone file has none). */
+export let helpTour: { tour(): void; whatsNew(): void } | null = null;
+export function setHelpTour(actions: typeof helpTour): void {
+  helpTour = actions;
 }

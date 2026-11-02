@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from "react";
 import { api, type Vault } from "../lib/api";
+import { inIPhoneApp } from "../lib/iphoneApp";
 import { relativeTime } from "../lib/links";
 import { Icon } from "../ui/Icon";
 import { confirmDialog, toast, toastError } from "../ui/overlays";
@@ -16,6 +17,8 @@ export interface Token {
   note_path: string | null;
   created_at: string;
   last_used_at: string | null;
+  /** Made by an app signing in (F25): the address it returns to, such as claude.ai. */
+  app: string | null;
 }
 
 /** Copy to the clipboard and say so; also used by ConnectClaude. */
@@ -83,9 +86,16 @@ export function ShareFromPhone() {
   return (
     <section className="settings-section">
       <h3>Share from iPhone</h3>
-      <p className="muted">
-        Save links, text and photos from any app's <b>Share</b> button into a note, as to-dos to file later. It works through an Apple Shortcut, set up once.
-      </p>
+      {inIPhoneApp() ? (
+        <p className="muted">
+          Save links, text and photos from any app's <b>Share</b> button into your home collection's Inbox, as to-dos to file later: choose <b>DO Notes</b> in the share
+          sheet. This app set it up when you signed in, with the token called <b>iPhone app</b> below. Revoking it stops sharing until you next open the app.
+        </p>
+      ) : (
+        <p className="muted">
+          Save links, text and photos from any app's <b>Share</b> button into a note, as to-dos to file later. It works through an Apple Shortcut, set up once.
+        </p>
+      )}
 
       {tokens && tokens.length > 0 && (
         <ul className="members">
@@ -126,7 +136,7 @@ export function ShareFromPhone() {
           </div>
           <ol className="steps">
             <li>
-              On your iPhone, open <b>Shortcuts</b>, tap <b>+</b> and name it <i>Save to Commonplace</i>.
+              On your iPhone, open <b>Shortcuts</b>, tap <b>+</b> and name it <i>Save to DO Notes</i>.
             </li>
             <li>
               Tap <b>ⓘ</b>, turn on <b>Show in Share Sheet</b>, and tap Done.
@@ -141,7 +151,7 @@ export function ShareFromPhone() {
             <li>
               Add <b>Get Dictionary Value</b> for <code>message</code> in <i>Contents of URL</i>, then <b>Show Notification</b> with it.
             </li>
-            <li>Share a web page to <i>Save to Commonplace</i>: it appears in “{noteName(fresh.row.note_path)}”.</li>
+            <li>Share a web page to <i>Save to DO Notes</i>: it appears in “{noteName(fresh.row.note_path)}”.</li>
           </ol>
           <button
             onClick={() => {

@@ -14,7 +14,9 @@ if (!email) {
 
 const password = randomBytes(12).toString("base64url");
 const hash = await Bun.password.hash(password);
-const [user] = await sql`update users set password_hash = ${hash} where lower(email) = ${email} returning id`;
+// Also turns off two-step sign-in and "passkeys only" (F40): this is how a locked-out person gets back in.
+const [user] = await sql`update users set password_hash = ${hash}, password_off = false, totp_secret = null, totp_last_step = null where lower(email) = ${email} returning id`;
+if (user) await sql`delete from recovery_codes where user_id = ${user.id}`;
 if (!user) {
   console.error(`No account with the email ${email}.`);
   process.exit(1);

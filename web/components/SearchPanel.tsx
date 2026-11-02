@@ -4,7 +4,8 @@
 // to the sidebar as a smart folder (web/lib/savedSearches.ts). Snippets are sanitised down to <mark>.
 
 import DOMPurify from "dompurify";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { findCommands, runCommandSoon } from "./CommandPalette";
 import { api, type Session } from "../lib/api";
 import { navigate, noteUrl } from "../lib/router";
 import { removeSearch, saveSearch, useSavedSearches } from "../lib/savedSearches";
@@ -20,6 +21,8 @@ interface Hit {
 
 export function SearchPanel({ vaultId, session, query, setQuery, onNavigate }: { vaultId: number; session: Session; query: string; setQuery: (q: string) => void; onNavigate: () => void }) {
   const [hits, setHits] = useState<Hit[] | null>(null);
+  // Typing a command's name ("tour") offers it too: the search box is where people look.
+  const commands = useMemo(() => findCommands(query), [query]);
   const [semantic, setSemantic] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -95,6 +98,19 @@ export function SearchPanel({ vaultId, session, query, setQuery, onNavigate }: {
             Try again
           </button>
         </div>
+      )}
+      {commands.length > 0 && (
+        <ul className="search-commands" aria-label="Commands">
+          {commands.map((c) => (
+            <li key={c.id}>
+              <button className="quiet" onClick={() => (onNavigate(), runCommandSoon(c))}>
+                {c.icon && <Icon name={c.icon} size={16} />}
+                <span>{c.title}</span>
+                <small>command</small>
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
       <ul className="search-results">
         {hits?.map((h) => (

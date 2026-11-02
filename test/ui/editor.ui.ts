@@ -16,10 +16,15 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 // bun test runs on UTC; the server and the pages work in London time, so "today" must match theirs.
 process.env.TZ = "Europe/London";
 import postgres from "postgres";
-import puppeteer, { type Browser, type Page } from "puppeteer-core";
+import puppeteer, { type Browser, type ElementHandle, type KeyInput, type Page } from "puppeteer-core";
 import { startFakeAi } from "../fakeAi";
 import { startFakeGitHub, TOKEN } from "../fakeGitHub";
+import { LONGVIEW_READ, LONGVIEW_WRITE, startFakeLongview, startFakeRecall, startFakeService } from "../fakeMcp";
 import { chromePath } from "./chrome";
+import { codeAt, fromBase32 } from "../../src/totp";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { addDays, dailyPath, formatDate } from "../../web/lib/templates";
 
 const PORT = 3298;
@@ -28,6 +33,8 @@ const ADMIN_DB = process.env.UI_ADMIN_DATABASE_URL ?? "postgres://commonplace:co
 const DB = ADMIN_DB.replace(/\/[^/]+$/, "/commonplace_ui");
 
 let server: ReturnType<typeof Bun.spawn>;
+/** Folder collections (F22) live here, as the laptop kit's COMMONPLACE_FOLDERS. */
+const FOLDERS = mkdtempSync(join(tmpdir(), "cp-ui-folders-"));
 let browser: Browser;
 let cookie = "";
 let vaultId = 0;
@@ -137,6 +144,12 @@ async function folderAction(p: Page, folder: string, item: string) {
   await p.waitForSelector(".menu-item");
   await p.evaluate((t) => [...document.querySelectorAll<HTMLButtonElement>(".menu-item")].find((b) => b.textContent?.includes(t))!.click(), item);
 }
+/** Choose from a table's Row or Column menu, for the cell being edited. */
+async function tableMenu(p: Page, menu: "Row" | "Column", item: string) {
+  await p.evaluate((m) => [...document.querySelectorAll<HTMLButtonElement>(".table-bar button")].find((b) => b.getAttribute("aria-label") === m)!.click(), menu);
+  await p.waitForSelector(".menu-item");
+  await p.evaluate((t) => [...document.querySelectorAll<HTMLButtonElement>(".menu-item")].find((b) => b.textContent === t)!.click(), item);
+}
 const clickToast = (p: Page, label: string) =>
   p.waitForSelector(".toast-action").then(() => p.evaluate((t) => [...document.querySelectorAll<HTMLButtonElement>(".toast-action")].find((b) => b.textContent === t)!.click(), label));
 
@@ -166,7 +179,7 @@ beforeAll(async () => {
 
 function startServer() {
   return Bun.spawn(["bun", "src/server.ts"], {
-    env: { ...process.env, DATABASE_URL: DB, PORT: String(PORT), ALLOW_SIGNUP: "true", SETUP_TOKEN: "", EMBEDDING_PROVIDER: "hash", SECRETS_KEY: "ui-secrets-key", ALLOW_LOCAL_AI: "true", WEBLINKS_ALLOW_LOCAL: "true", GITHUB_API_URL: "http://localhost:3286", NODE_ENV: process.env.UI_NODE_ENV ?? "production" },
+    env: { ...process.env, DATABASE_URL: DB, PORT: String(PORT), ALLOW_SIGNUP: "true", AIXF_IDS: "false", SETUP_TOKEN: "", EMBEDDING_PROVIDER: "hash", SECRETS_KEY: "ui-secrets-key", ALLOW_LOCAL_AI: "true", WEBLINKS_ALLOW_LOCAL: "true", GITHUB_API_URL: "http://localhost:3286", FOLDERS_ROOT: FOLDERS, FOLDERS_LABEL: "~/Commonplace", CLOUD_LINK: "true", ALLOW_LOCAL_CLOUD: "true", CONNECTIONS_ALLOW_LOCAL: "true", RECALL_MCP_URL: "http://localhost:3412/mcp/", NODE_ENV: process.env.UI_NODE_ENV ?? "production" },
     stdout: "ignore",
     stderr: "inherit",
   });
@@ -187,6 +200,7 @@ afterAll(async () => {
   if (process.env.UI_DEBUG) console.log("page errors:", errors);
   await browser?.close();
   server?.kill();
+  rmSync(FOLDERS, { recursive: true, force: true });
 });
 
 describe("live preview", () => {
@@ -263,7 +277,7 @@ describe("live preview", () => {
     await p.keyboard.type("Brick & Co");
     await p.keyboard.press("Tab");
     await p.keyboard.type("95");
-    await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".table-bar button")].find((b) => b.textContent?.includes("Column right"))!.click());
+    await tableMenu(p, "Column", "Insert column right");
     await p.keyboard.type("Notes");
     await p.keyboard.press("Escape");
     await until(async () => (await raw(t.id)).includes("| Brick & Co |    95 | Notes |"), 8000);
@@ -274,6 +288,58 @@ describe("live preview", () => {
     await p.keyboard.press("z");
     await p.keyboard.up("Meta");
     await until(async () => !(await raw(t.id)).includes("Notes"), 8000);
+    await p.close();
+  });
+
+  test("tables: sort, move a row and a column, paste a spreadsheet range into a cell and into the note", async () => {
+    const raw = async (id: number) => (await api(`/vaults/${vaultId}/notes/${id}`)).content as string;
+    const t = await note("Plants.md", "# Plants\n\n| Plant | Height |\n|---|---|\n| sage | 60 |\n| Basil | 120 |\n| mint | 9 |\n\nAfter\n");
+    const p = await openNote(t.id);
+    await p.waitForSelector(".cm-table-edit td");
+    // Sort by Height: numbers by size, not as text.
+    await p.click('.cm-table-edit td[data-r="0"][data-c="1"]');
+    // The bar is on screen, not clipped by the table's block: a real click reaches it.
+    await p.click('.table-bar button[aria-label="Column"]');
+    await p.waitForSelector(".menu-item");
+    await p.keyboard.press("Escape");
+    await p.click('.cm-table-edit td[data-r="0"][data-c="1"]');
+    await tableMenu(p, "Column", "Sort A to Z");
+    await until(async () => (await raw(t.id)).includes("| mint  | 9      |\n| sage  | 60     |\n| Basil | 120    |"), 8000);
+    // Move Basil up, then the Height column to the left.
+    await p.click('.cm-table-edit td[data-r="2"][data-c="0"]');
+    await tableMenu(p, "Row", "Move row up");
+    await until(async () => (await raw(t.id)).includes("| Basil | 120    |\n| sage  | 60     |"), 8000);
+    await p.click('.cm-table-edit td[data-r="1"][data-c="1"]');
+    await tableMenu(p, "Column", "Move column left");
+    await until(async () => (await raw(t.id)).startsWith("# Plants\n\n| Height | Plant |\n| ------ | ----- |\n| 9      | mint  |\n| 120    | Basil |"), 8000);
+    // The header row can't move or be deleted.
+    await p.click('.cm-table-edit th[data-c="0"]');
+    await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".table-bar button")].find((b) => b.getAttribute("aria-label") === "Row")!.click());
+    await p.waitForSelector(".menu-item");
+    expect(await p.$$eval(".menu-item", (b) => b.map((x) => x.textContent))).toEqual(["Insert row below"]);
+    await p.keyboard.press("Escape");
+    // Two rows by two columns pasted into the last row's first cell: one row is added.
+    const paste = (sel: string, text: string) =>
+      p.evaluate(
+        (s, v) => {
+          const dt = new DataTransfer();
+          dt.setData("text/plain", v);
+          document.querySelector(s)!.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+        },
+        sel,
+        text,
+      );
+    await p.click('.cm-table-edit td[data-r="2"][data-c="0"]');
+    await paste('.cm-table-edit td[data-r="2"][data-c="0"]', "45\tthyme\r\n30\tchives\r\n");
+    await until(async () => (await raw(t.id)).includes("| 45     | thyme  |\n| 30     | chives |\n\nAfter"), 8000);
+    await p.keyboard.press("Escape");
+    // A range pasted at the end of the note becomes a table of its own.
+    const after = await p.evaluateHandle(() => [...document.querySelectorAll(".cm-line")].find((l) => l.textContent === "After")!);
+    await (after as ElementHandle<Element>).click();
+    await p.keyboard.press("End");
+    await paste(".cm-content", "Month\tRain\nMay\t50\nJune\t42\n");
+    await until(async () => (await raw(t.id)).endsWith("After\n\n| Month | Rain |\n| ----- | ---- |\n| May   | 50   |\n| June  | 42   |\n"), 8000);
+    await until(() => p.$$eval(".cm-table-edit", (x) => x.length).then((n) => n === 2));
     await p.close();
   });
 
@@ -430,13 +496,18 @@ describe("live preview", () => {
 
   test("a dataviewjs script that never stops is stopped, and the page stays usable", async () => {
     const n = await note("JS Forever.md", "# JS Forever\n\n```dataviewjs\nlet i = 0;\nwhile (true) i++;\n```\n");
-    const p = await openNote(n.id);
+    const p = await open(`/v/${vaultId}/n/${n.id}`);
+    // The script holds its frame for 5 s before it's stopped, which on a busy machine can push the
+    // note's first paint past the usual 10 s wait: this page gets 20.
+    p.setDefaultTimeout(20_000);
+    await p.waitForSelector(".cm-content");
     const handle = await p.waitForSelector(".cm-content iframe.dv-frame");
     const frame = (await handle!.contentFrame())!;
-    await frame.waitForFunction(() => document.querySelector(".dv-error")?.textContent?.includes("ran for over 5 seconds"), { timeout: 15000 });
+    // 5 s of the script's busy time, plus however long the sandbox takes to start on this machine.
+    await frame.waitForFunction(() => document.querySelector(".dv-error")?.textContent?.includes("ran for over 5 seconds"), { timeout: 25_000 });
     expect(await p.evaluate(() => document.querySelector(".note-title")?.textContent)).toBe("JS Forever");
     await p.close();
-  });
+  }, 45_000);
 
   test("the outline shows headings as plain text", async () => {
     const t = await note("Outline.md", "# Plan **now**\n\n## See [[Contractors|builders]]");
@@ -812,6 +883,73 @@ describe("commands: the / menu and ⌘K", () => {
     await p.close();
   });
 
+  test("spelling and grammar help: on in prose, off in code, properties and links; switched off from ⌘K", async () => {
+    const n = await note("Wide/Spelling.md", "---\nstatus: draft\n---\n# Spelling\n\nSome prose with `code` and https://example.com here.\n\n```js\nconst x = 1;\n```\n");
+    const p = await openNote(n.id);
+    const attrs = () => p.$eval(".cm-content", (e) => [e.getAttribute("spellcheck"), e.getAttribute("autocorrect"), e.getAttribute("autocapitalize"), e.getAttribute("writingsuggestions")]);
+    expect(await attrs()).toEqual(["true", "on", "sentences", "true"]);
+    const checked = (text: string) =>
+      p.evaluate((t) => {
+        const lines = [...document.querySelectorAll<HTMLElement>(".cm-line")];
+        const line = lines.find((l) => l.textContent?.includes(t))!;
+        const el = [...line.querySelectorAll<HTMLElement>("*")].find((x) => x.textContent === t) ?? line;
+        return (el.closest("[spellcheck]") as HTMLElement).getAttribute("spellcheck");
+      }, text);
+    expect(await checked("Some prose with ")).toBe("true");
+    expect(await checked("const x = 1;")).toBe("false");
+    expect(await p.evaluate(() => [...document.querySelectorAll<HTMLElement>(".cm-line")].filter((l) => l.textContent?.includes("status")).every((l) => l.closest("[spellcheck]")!.getAttribute("spellcheck") === "false"))).toBe(true);
+    expect(await p.evaluate(() => [...document.querySelectorAll<HTMLElement>(".cm-line [spellcheck='false']")].some((e) => e.textContent?.includes("example.com")))).toBe(true);
+    await p.keyboard.down("Meta");
+    await p.keyboard.press("k");
+    await p.keyboard.up("Meta");
+    await p.waitForSelector(".palette input");
+    await p.keyboard.type("Turn off spelling");
+    await Bun.sleep(150);
+    await p.keyboard.press("Enter");
+    await until(async () => (await attrs())[0] === "false");
+    await p.reload();
+    await p.waitForSelector(".cm-content");
+    expect((await attrs())[0]).toBe("false"); // remembered on this device
+    await p.evaluate(() => localStorage.removeItem("cp:writing-aids"));
+    await p.close();
+  });
+
+  test("#Type inline (F26): # offers New Critter…, the title follows, Enter makes the note and links it; Undo puts the text back", async () => {
+    await note("Types/Critter.md", "---\nicon: user\nproperties:\n  - name: habitat\n    kind: text\n---\n# {{title}}\n\n## Notes\n").catch(() => {});
+    for (const phone of [false, true]) {
+      const who = phone ? "Pip Okafor" : "Sam Okafor";
+      const n = await note(`Wide/Hash type ${phone ? "phone" : "laptop"}.md`, "# Met\n");
+      const p = await openNote(n.id, phone);
+      await endOfDoc(p);
+      await p.keyboard.press("Enter");
+      await p.keyboard.type("Met #Crit");
+      await p.waitForFunction(() => [...document.querySelectorAll(".cm-tooltip-autocomplete li")].some((l) => l.textContent?.includes("New Critter…")));
+      await p.evaluate(() => [...document.querySelectorAll<HTMLElement>(".cm-tooltip-autocomplete li")].find((l) => l.textContent?.includes("New Critter…"))!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+      await until(async () => (await raw(n.id)).includes("Met #Critter "));
+      await p.keyboard.type(who);
+      await p.waitForFunction((w) => document.querySelector(".cm-tooltip-autocomplete li[aria-selected]")?.textContent?.includes(`New Critter “${w}”`), {}, who);
+      await Bun.sleep(150); // CodeMirror ignores Enter for 75 ms after the list changes
+      await p.keyboard.press("Enter");
+      await until(async () => (await raw(n.id)).includes(`Met [[${who}]]`));
+      await until(async () => ((await api(`/vaults/${vaultId}/notes`)) as { path: string }[]).some((x) => x.path === `${who}.md`));
+      const made = ((await api(`/vaults/${vaultId}/notes`)) as { id: number; path: string }[]).find((x) => x.path === `${who}.md`)!;
+      expect((await api(`/vaults/${vaultId}/notes/${made.id}`)).content).toMatch(new RegExp(`^---\\ntype: Critter\\n[\\s\\S]*# ${who}\\n`));
+      await p.keyboard.down("Meta");
+      await p.keyboard.press("z");
+      await p.keyboard.up("Meta");
+      await until(async () => (await raw(n.id)).includes(`Met #Critter ${who}`));
+      // Typed by hand, a tag with a type's name stays a tag: nothing is offered after it.
+      await endOfDoc(p);
+      await p.keyboard.press("Enter");
+      await p.keyboard.type("#critter ");
+      await p.keyboard.press("Escape");
+      await p.keyboard.type("and more");
+      await Bun.sleep(300);
+      expect(await p.$$eval(".cm-tooltip-autocomplete li", (l) => l.map((x) => x.textContent).join("|"))).not.toContain("New Critter “");
+      await p.close();
+    }
+  });
+
   test("⌘K lists every command, including this note's, and runs one", async () => {
     const n = await note("Palette.md", "# Palette\n");
     const p = await openNote(n.id);
@@ -852,6 +990,95 @@ describe("commands: the / menu and ⌘K", () => {
     await p.evaluate(() => [...document.querySelectorAll<HTMLInputElement>(".graph-filters label")].find((l) => l.textContent?.includes("Notes with no links"))!.querySelector("input")!.click());
     expect(await p.$eval(".graph-badge", (e) => e.textContent)).toBe("1");
     await p.evaluate(() => [...document.querySelectorAll<HTMLInputElement>(".graph-filters label")].find((l) => l.textContent?.includes("Notes with no links"))!.querySelector("input")!.click());
+    await p.close();
+  });
+
+  test("the journal (F24): an entry from ⌘K lands in today's note under Journal, and the journal page shows it", async () => {
+    // Its own collection as home, so today's note in the main one is left for the daily-note tests.
+    const jv = (await api("/vaults", { name: "Journal UI" })).id;
+    await api(`/vaults/${jv}/notes`, { path: "Start.md", content: "# Start\n" });
+    await api("/me/home", { vaultId: jv }, "PUT");
+    const p = await open(`/v/${jv}`);
+    await p.waitForSelector(".tree-row");
+    await p.keyboard.down("Meta");
+    await p.keyboard.press("k");
+    await p.keyboard.up("Meta");
+    await p.waitForSelector(".palette input");
+    await p.keyboard.type("New journal entry");
+    await p.keyboard.press("Enter");
+    await p.waitForSelector('textarea[aria-label="Journal entry"]');
+    await p.keyboard.type("Fixed the gate at last.");
+    await p.keyboard.down("Meta");
+    await p.keyboard.press("Enter");
+    await p.keyboard.up("Meta");
+    await p.waitForFunction(() => document.querySelector(".toast")?.textContent?.includes("Added to your journal"));
+    const day = await p.evaluate(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; });
+    const daily = ((await api(`/vaults/${jv}/notes`)) as { id: number; path: string }[]).find((n) => n.path === `Daily/${day}.md`)!;
+    expect((await api(`/vaults/${jv}/notes/${daily.id}`)).content).toMatch(/## Journal\n\n### \d{2}:\d{2}\n\nFixed the gate at last\.\n/);
+    await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".sidebar .type-row")].find((b) => b.textContent?.includes("Journal"))!.click());
+    await p.waitForSelector(".journal-day");
+    expect(await p.$eval(".journal-day", (e) => e.textContent)).toContain("Fixed the gate at last.");
+    await api("/me/home", { vaultId }, "PUT");
+    await p.close();
+  });
+
+  test("Import from Day One (F24): the journal page counts the export, asks, and shows the imported days", async () => {
+    const { zipSync, strToU8 } = await import("fflate");
+    const iv = (await api("/vaults", { name: "Day One UI" })).id;
+    const file = `${require("node:os").tmpdir()}/cp-dayone-ui.zip`;
+    await Bun.write(
+      file,
+      zipSync({
+        "Journal.json": strToU8(
+          JSON.stringify({
+            entries: [
+              { uuid: "1", creationDate: "2019-05-04T08:00:00Z", timeZone: "Europe/London", text: "# Bluebells\nIn the woods at last\\." },
+              { uuid: "2", creationDate: "2019-05-05T19:30:00Z", timeZone: "Europe/London", text: "Quiet evening." },
+            ],
+          }),
+        ),
+      }),
+    );
+    const p = await open(`/v/${iv}/journal`);
+    await p.waitForSelector(".journal-main .muted");
+    const [chooser] = await Promise.all([p.waitForFileChooser(), p.click('button[aria-label="Import from Day One"]')]);
+    await chooser.accept([file]);
+    await p.waitForFunction(() => document.querySelector(".modal h2")?.textContent === "Import 2 entries from Day One?");
+    expect(await p.$eval(".modal", (e) => e.textContent)).toContain("on 2 days");
+    await p.click(".modal button.primary");
+    await p.waitForSelector(".journal-day");
+    expect(await p.$$eval(".journal-day h3", (h) => h.map((x) => x.textContent))).toEqual(["Sunday 5 May 2019", "Saturday 4 May 2019"]);
+    expect(await p.$eval(".journal-day:last-child", (e) => e.textContent)).toContain("Bluebells");
+    await p.close();
+  });
+
+  test("press and hold Today offers a journal entry", async () => {
+    const p = await open(`/v/${vaultId}`);
+    await p.waitForSelector(".today-button");
+    await p.click(".today-button", { button: "right" });
+    await p.waitForSelector(".menu-item");
+    expect(await p.$$eval(".menu-item", (b) => b.map((x) => x.textContent))).toEqual(["Today's note", "New journal entry"]);
+    await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".menu-item")].find((b) => b.textContent === "New journal entry")!.click());
+    await p.waitForSelector('textarea[aria-label="Journal entry"]');
+    await p.keyboard.press("Escape");
+    await p.close();
+  });
+
+  test("an app signing in (F25): the consent page names it, Allow sends a code back, and Connections lists it", async () => {
+    const p = await open(await oauthClient("Claude"));
+    await p.waitForSelector(".consent h2");
+    expect(await p.$eval(".consent h2", (e) => e.textContent)).toBe("Let Claude use your notes?");
+    expect(await p.$eval(".consent", (e) => e.textContent)).toContain("It returns to 127.0.0.1");
+    await p.click(".consent label.check input");
+    await Promise.all([p.waitForNavigation(), p.click(".consent-actions .primary")]);
+    const back = new URL(p.url());
+    expect([back.pathname, back.searchParams.get("state"), !!back.searchParams.get("code")]).toEqual(["/oauth-test-callback", "ui", true]);
+    // The code isn't exchanged here (the e2e tests do that), so nothing is listed yet; an unknown app is explained, not followed.
+    const seen = errors.length;
+    await p.goto(`${BASE}/oauth/authorize?client_id=cpo_nobody&response_type=code`);
+    await p.waitForSelector(".consent .error");
+    expect(await p.$eval(".consent .error", (e) => e.textContent)).toContain("isn't registered");
+    errors.splice(seen, errors.length - seen, ...errors.slice(seen).filter((e) => !e.includes("status of 400"))); // the refusal, as expected
     await p.close();
   });
 
@@ -978,7 +1205,7 @@ describe("help", () => {
     await p.click('.sidebar-foot [aria-label="Help"]');
     await p.waitForSelector(".help-page h1");
     expect(await heading(p)).toBe("Help");
-    expect(await p.$$eval(".help-nav button", (b) => b.length)).toBe(19);
+    expect(await p.$$eval(".help-nav > button", (b) => b.length)).toBe(23); // the topics (the tour's buttons are above them)
     await p.waitForFunction(() => !!document.querySelector(".help-page .mermaid-diagram")?.shadowRoot?.querySelector("svg"));
     await p.evaluate(() => [...document.querySelectorAll<HTMLAnchorElement>(".help-page a.internal-link")].find((a) => a.textContent === "Links and embeds")!.click());
     await p.waitForFunction(() => document.querySelector(".help-page h1")?.textContent === "Links and embeds");
@@ -1174,6 +1401,35 @@ describe("GitHub vaults (F14)", () => {
     const bar = (await (await phone.$(".sidebar .branch-bar"))!.boundingBox())!;
     expect(bar.x).toBeGreaterThanOrEqual(0);
     expect(bar.x + bar.width).toBeLessThanOrEqual(390);
+    // One line on a phone: the count and Send/⋯; the branch's name is on the changes page.
+    expect(bar.height).toBeLessThanOrEqual(50);
+    expect(await phone.$eval(".sidebar .branch-line", (e) => getComputedStyle(e).display)).toBe("none");
+    // Searching folds away what's above the box, so it sits at the top, clear of the keyboard;
+    // it stays folded while there are words in it, and comes back when they're cleared.
+    const shown = (sel: string) => phone.$eval(sel, (e) => getComputedStyle(e).display !== "none");
+    await phone.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".sidebar .tabs button")].find((b) => b.textContent === "Search")!.click());
+    await phone.waitForSelector(".search-panel input");
+    // The Search tab puts the cursor in the box; leaving it empty brings the panel back.
+    await phone.focus(".search-panel input");
+    await until(async () => !(await shown(".sidebar .vault-switch")));
+    await phone.evaluate(() => (document.activeElement as HTMLElement).blur());
+    await until(() => shown(".sidebar .vault-switch"));
+    await phone.focus(".search-panel input");
+    await until(async () => !(await shown(".sidebar .vault-switch")));
+    expect(await shown(".sidebar .branch-bar")).toBe(false);
+    expect(await shown(".sidebar .sidebar-actions")).toBe(false);
+    expect(await shown(".sidebar .tabs")).toBe(true);
+    expect((await (await phone.$(".search-panel input"))!.boundingBox())!.y).toBeLessThan(150);
+    await phone.keyboard.type("flue");
+    await phone.evaluate(() => (document.activeElement as HTMLElement).blur());
+    expect(await shown(".sidebar .vault-switch")).toBe(false);
+    await phone.$eval(".search-panel input", (e) => {
+      const i = e as HTMLInputElement;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(i, "");
+      i.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await until(() => shown(".sidebar .vault-switch"));
+    await phone.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".sidebar .tabs button")].find((b) => b.textContent === "Files")!.click());
     await phone.click(".sidebar .branch-count");
     await phone.waitForSelector(".change-edited");
     expect(await phone.$(".app.left-open")).toBeNull();
@@ -1300,6 +1556,293 @@ describe("Settings (F17)", () => {
     await p.close();
   });
 
+  test("AI-XF (F9): a new note gets an id; Export as AI-XF bundle asks once before giving the rest ids", async () => {
+    const xv = (await api("/vaults", { name: "Bundle test" })).id;
+    await api(`/vaults/${xv}/notes`, { path: "Older", content: "# Older\n" }); // made before ids were on: none
+    await api(`/vaults/${xv}`, { noteIds: true }, "PATCH");
+    const made = await api(`/vaults/${xv}/notes`, { path: "Kitchen plan", content: "# Kitchen plan\n" });
+    expect(made.content).toContain("id: kitchen-plan");
+    await api(`/vaults/${xv}/notes`, { path: "Daily/2026-10-30", content: "# Friday\n" }); // daily notes get none
+    const p = await open(`/v/${xv}/n/${made.id}`);
+    await p.waitForSelector(".note-body[data-synced]");
+    // The id is kept out of sight: no properties panel for a note that has only its id.
+    await p.waitForFunction(() => document.querySelector(".cm-content")?.textContent?.includes("Kitchen plan"));
+    expect(await p.$(".cm-lp-props")).toBeNull();
+    expect(await p.$eval(".cm-content", (e) => e.textContent ?? "")).not.toContain("kitchen-plan");
+    // ⌘K offers the id and the bundle.
+    await p.keyboard.down("Meta");
+    await p.keyboard.press("k");
+    await p.keyboard.up("Meta");
+    await p.waitForSelector(".palette li");
+    const titles = await p.$$eval(".palette li .palette-title", (l) => l.map((e) => e.textContent));
+    expect(titles).toContain("Copy the note's id");
+    expect(titles).toContain("Export collection as AI-XF bundle");
+    await p.keyboard.press("Escape");
+    // Settings → This collection → Export: the older and daily notes need ids first, asked once.
+    await p.click('button[aria-label="Settings"]');
+    await p.waitForSelector(".settings-section");
+    // Note the download's address and stop it there: headless Chrome holds on to a download.
+    let downloaded = "";
+    await p.setRequestInterception(true);
+    p.on("request", (r) => {
+      if (!r.url().includes("format=ai-xf")) return void r.continue();
+      downloaded = r.url();
+      void r.abort();
+    });
+    await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".settings-section button")].find((b) => b.textContent === "Export as AI-XF bundle (.zip)")!.click());
+    await until(async () => (await p.$$eval(".modal, [role=dialog], [role=alertdialog]", (l) => l.map((e) => e.textContent ?? "").join(" | "))).includes("Give 2 notes ids?"));
+    await p.click("[data-dialog-action]");
+    await until(() => downloaded.endsWith(`/api/vaults/${xv}/export?format=ai-xf`));
+    expect((await api(`/vaults/${xv}/aixf/ids`)).missing).toBe(0);
+    await p.close();
+  });
+
+  test("Setup on the Mac (F22): keep a collection in a new folder, and the menu groups it", async () => {
+    const fv = (await api("/vaults", { name: "Mac notes" })).id;
+    await api(`/vaults/${fv}/notes`, { path: "Hello.md", content: "# Hello" });
+    const p = await open(`/v/${fv}`);
+    await p.waitForSelector(".tree-row");
+    await p.click('button[aria-label="Settings"]');
+    await p.waitForSelector(".setup-facts");
+    await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".setup button")].find((b) => b.textContent === "Keep in a folder on this Mac…")!.click());
+    await p.waitForSelector(".choose-list li");
+    await p.keyboard.press("Enter"); // New folder…
+    await p.waitForSelector(".modal input");
+    await p.keyboard.type("Mac notes");
+    await p.keyboard.press("Enter");
+    await p.waitForFunction(() => [...document.querySelectorAll(".choose-label")].some((e) => e.textContent === "Both, kept in step"));
+    await p.keyboard.press("Enter");
+    await until(async () => (await modalText(p)).includes("In a folder on this Mac: ~/Commonplace/Mac notes"));
+    await until(() => existsSync(join(FOLDERS, "Mac notes/Hello.md")));
+    await until(async () => (await p.$$eval('select[aria-label="Collection"] optgroup', (g) => g.map((x) => x.getAttribute("label")))).includes("In folders on this Mac"));
+    await api(`/vaults/${fv}/folder`, undefined, "DELETE");
+    await p.close();
+  });
+
+  test("passkeys (F32): add one in Settings → Account, sign in with it on a signed-out browser, remove it and Undo", async () => {
+    // Chrome's virtual authenticator stands in for Face ID: it says yes at once.
+    const authenticator = async (page: Page) => {
+      const cdp = await page.createCDPSession();
+      await cdp.send("WebAuthn.enable");
+      const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", {
+        options: { protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true },
+      });
+      return { cdp, authenticatorId };
+    };
+    const p = await open(`/v/${vaultId}`);
+    const mine = await authenticator(p);
+    try {
+      await p.waitForSelector(".tree-row");
+      await p.click("button.account");
+      await p.waitForSelector(".passkeys");
+      await p.waitForFunction(() => document.querySelector(".passkeys")?.textContent?.includes("No passkeys yet."));
+      await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".passkeys button")].find((b) => b.textContent?.includes("Add a passkey"))!.click());
+      await p.waitForSelector(".passkey-list li");
+      expect(await p.$eval(".passkey-list li", (e) => e.textContent)).toContain("not used yet");
+
+      // Another browser, signed out, with the same passkey (as iCloud Keychain would share it).
+      const { credentials } = await mine.cdp.send("WebAuthn.getCredentials", { authenticatorId: mine.authenticatorId });
+      expect(credentials).toHaveLength(1);
+      const ctx = await browser.createBrowserContext();
+      const out = await ctx.newPage();
+      const theirs = await authenticator(out);
+      await theirs.cdp.send("WebAuthn.addCredential", { authenticatorId: theirs.authenticatorId, credential: credentials[0]! });
+      await out.goto(`${BASE}/`);
+      await out.waitForSelector(".passkey-button");
+      // The email box offers passkeys among its suggestions too.
+      expect(await out.$eval("input[type=email]", (e) => e.getAttribute("autocomplete"))).toBe("username webauthn");
+      // Chrome's stand-in answers the email box's suggestion by itself, so it may be in already;
+      // otherwise the button.
+      await out.evaluate(() => document.querySelector<HTMLButtonElement>(".passkey-button")?.click());
+      await out.waitForSelector(".tree-row", { timeout: 15000 });
+      expect(await out.$(".login-card")).toBeNull();
+      await ctx.close();
+
+      // Remove it, and Undo.
+      await p.click('button[aria-label^="Remove the passkey"]');
+      await p.waitForFunction(() => document.querySelector(".passkeys")?.textContent?.includes("No passkeys yet."));
+      await p.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => t.textContent?.includes("Removed the passkey")));
+      await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".toast-action")].find((b) => b.textContent === "Undo")!.click());
+      await p.waitForSelector(".passkey-list li");
+    } finally {
+      for (const k of (await api("/passkeys")) as { id: number }[]) await api(`/passkeys/${k.id}`, undefined, "DELETE");
+      await p.close();
+    }
+  });
+
+  test("Siri's links (L8 step 5): /find?q= opens the note by its title; /ask?q= sends the question to the assistant", async () => {
+    const id = (await note("Siri zephyr service.md", "# Siri zephyr service\n\nDue in March.\n")).id;
+    const p = await open(`/find?q=${encodeURIComponent("siri zephyr")}`);
+    const panelWas = await p.evaluate(() => ({ "cp:right": localStorage.getItem("cp:right"), "cp:rightTab": localStorage.getItem("cp:rightTab") }));
+    try {
+      await p.waitForFunction((n) => location.pathname.endsWith(`/n/${n}`), {}, id);
+      await p.waitForSelector(".cm-content");
+      expect(await p.$eval(".cm-content", (e) => e.textContent)).toContain("Due in March");
+      // Nothing by that name: said so, and the collection opens.
+      await p.goto(`${BASE}/find?q=${encodeURIComponent("no such note anywhere")}`);
+      await p.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => t.textContent?.includes("No note called")));
+      await p.waitForFunction(() => /^\/v\/\d+$/.test(location.pathname));
+      // Ask: the side panel opens on the assistant with the question.
+      await p.goto(`${BASE}/ask?q=${encodeURIComponent("When is the zephyr due?")}`);
+      await p.waitForFunction(() => /^\/v\/\d+$/.test(location.pathname));
+      await p.waitForFunction(() => document.querySelector(".app")?.classList.contains("right-ai"));
+    } finally {
+      // The side panel's tab and whether it's open are kept in the browser: put them back for the tests after.
+      await p.evaluate((was) => Object.entries(was).forEach(([k, v]) => (v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v))), panelWas).catch(() => {});
+      await p.close();
+    }
+  });
+
+  test("two-step sign-in (F40): turn it on in Settings with the code app's code, keep the recovery codes, then sign in with password and code", async () => {
+    const p = await open(`/v/${vaultId}`);
+    const clickText = (page: Page, sel: string, text: string) =>
+      page.evaluate((sel, text) => [...document.querySelectorAll<HTMLButtonElement>(sel)].find((b) => b.textContent?.includes(text))!.click(), sel, text);
+    try {
+      await p.waitForSelector(".tree-row");
+      await p.click("button.account");
+      await p.waitForSelector(".two-step");
+      await clickText(p, ".two-step button", "Turn on two-step");
+      await p.waitForSelector(".two-step-setup img");
+      expect(await p.$eval(".two-step-setup a", (a) => a.getAttribute("href"))).toStartWith("otpauth://totp/");
+      const secret = fromBase32(await p.$eval(".two-step-setup .secret", (e) => e.textContent!));
+      const used = Math.floor(Date.now() / 30_000);
+      await p.type('input[aria-label="Code from your code app"]', codeAt(secret, used));
+      await p.type('.two-step-setup input[type="password"]', "password-ui");
+      await p.click('.two-step-setup button[type="submit"]');
+      await p.waitForSelector(".recovery-codes li");
+      expect(await p.$$eval(".recovery-codes li", (l) => l.length)).toBe(10);
+      await clickText(p, ".recovery button", "I've saved them");
+      await p.waitForFunction(() => document.querySelector(".two-step")?.textContent?.includes("10 recovery codes left"));
+
+      // A signed-out browser: the password, then the code.
+      const ctx = await browser.createBrowserContext();
+      const out = await ctx.newPage();
+      await out.goto(`${BASE}/`);
+      await out.waitForSelector(".login-card input[type=email]");
+      await out.type(".login-card input[type=email]", "ui@example.com");
+      await out.type(".login-card input[type=password]", "password-ui");
+      await out.click(".login-card button.primary");
+      await out.waitForSelector('input[aria-label="Code"]');
+      expect(await out.$eval('input[aria-label="Code"]', (e) => e.getAttribute("autocomplete"))).toBe("one-time-code");
+      await out.type('input[aria-label="Code"]', codeAt(secret, used + 1));
+      await out.click(".login-card button.primary");
+      await out.waitForSelector(".tree-row", { timeout: 15000 });
+      await ctx.close();
+    } finally {
+      await api("/me/two-step", { password: "password-ui" }, "DELETE").catch(() => {});
+      await p.close();
+    }
+  });
+
+  test("Connected services (F30, F33): Longview with a read token; Recall signs in on its own page and the list updates by itself; Review shows its tools", async () => {
+    const longview = startFakeLongview(3411);
+    const recall = startFakeRecall(3412);
+    const p = await open(`/v/${vaultId}`);
+    try {
+      await p.waitForSelector(".tree-row");
+      await p.click('button[aria-label="Settings"]');
+      await p.waitForSelector(".settings-nav");
+      await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".settings-nav button")].find((b) => b.textContent?.startsWith("Connections"))!.click());
+      await p.waitForFunction(() => [...document.querySelectorAll(".connection-add h4")].some((h) => h.textContent === "Recall"));
+      // Longview: the address is filled in for the usual one; here, the fake's.
+      await p.$eval('input[aria-label="Longview\'s address"]', (e) => (e as HTMLInputElement).select());
+      await p.keyboard.type("http://localhost:3411/mcp");
+      await p.type('input[aria-label="Longview read token"]', LONGVIEW_READ);
+      await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".settings-section button")].find((b) => b.textContent === "Connect Longview")!.click());
+      await p.waitForFunction(() => document.body.textContent?.includes("token …0001"));
+      // Send to Longview (F30 step 4): a write token, kept apart from the read one.
+      await p.waitForSelector(".longview-send summary"); // it loads its own state
+      await p.evaluate(() => document.querySelector<HTMLElement>(".longview-send summary")!.click());
+      await p.type('input[aria-label="Longview write token"]', LONGVIEW_WRITE);
+      await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".longview-send button")].find((b) => b.textContent === "Turn on")!.click());
+      await p.waitForFunction(() => document.querySelector(".longview-send")?.textContent?.includes("Send to Longview is on (token …0002)"));
+      // Recall: the button opens Recall's page in a new tab; signing in there shows here by itself.
+      await p.waitForFunction(() => [...document.querySelectorAll<HTMLButtonElement>("button")].some((b) => b.textContent?.includes("Connect Recall") && !b.disabled));
+      const opened = new Promise<Page>((done) => browser.once("targetcreated", async (t) => done((await t.page())!)));
+      await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.includes("Connect Recall"))!.click());
+      const tab = await opened;
+      await tab.waitForFunction(() => document.body?.textContent?.includes("Recall is connected"), { timeout: 15000 });
+      await tab.close();
+      await p.waitForFunction(() => document.body.textContent?.includes("signed in, read only"), { timeout: 15000 });
+      // Review: the tools in their groups; a tool that changes things can't be turned on.
+      recall.addTools([{ name: "delete_card", description: "Delete a card.", annotations: { destructiveHint: true } }]);
+      await p.evaluate(() => [...document.querySelectorAll<HTMLLIElement>(".connection-list li")].find((li) => li.textContent?.includes("Recall"))!.querySelector<HTMLButtonElement>("button")!.click());
+      await p.waitForSelector(".tool-group");
+      await p.waitForFunction(() => [...document.querySelectorAll(".tool-group legend")].some((l) => l.textContent === "In the side panel"));
+      expect(await p.$$eval(".tool-group legend", (l) => l.map((x) => x.textContent))).toEqual(["Read", "Changes things", "In the side panel"]);
+      expect(await p.$eval(".tool-row.off input", (i) => (i as HTMLInputElement).disabled)).toBe(true);
+      await p.click(".modal [data-dialog-action]");
+      await p.waitForFunction(() => !document.querySelector(".tool-group"));
+
+      // A Weblink note's ⋯ menu sends its address, with the reason typed; never the note.
+      const weblink = (await note("Saved page.md", "---\ntype: Weblink\nurl: https://example.com/carbon\n---\n# Saved page\n\nMy own notes on it.\n")).id;
+      const q = await openNote(weblink);
+      try {
+        await q.click('button[aria-label="More"]');
+        await q.waitForFunction(() => [...document.querySelectorAll(".menu-item")].some((b) => b.textContent?.includes("Send to Longview")));
+        await q.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".menu-item")].find((b) => b.textContent?.includes("Send to Longview"))!.click());
+        await q.waitForSelector("[data-dialog-input]");
+        await q.type("[data-dialog-input]", "Good numbers");
+        await q.click("[data-dialog-action]");
+        await q.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => t.textContent?.includes("Sent to Longview")));
+        expect(longview.seen.find((x) => x.tool === "save_url")?.args).toEqual({ url: "https://example.com/carbon", note: "Good numbers" });
+        expect(JSON.stringify(longview.seen)).not.toContain("My own notes");
+      } finally {
+        await q.close();
+      }
+    } finally {
+      for (const c of ((await api("/me/connections")) as { connections: { id: number }[] }).connections) await api(`/me/connections/${c.id}`, undefined, "DELETE").catch(() => {});
+      longview.stop();
+      recall.stop();
+      await p.close();
+    }
+  });
+
+  test("Add a connection (F33 step 2): look at an address, read the no-sign-in warning, connect, choose its tools and try it", async () => {
+    const service = startFakeService(3413);
+    const p = await open(`/v/${vaultId}`);
+    try {
+      await p.waitForSelector(".tree-row");
+      await p.click('button[aria-label="Settings"]');
+      await p.waitForSelector(".settings-nav");
+      await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".settings-nav button")].find((b) => b.textContent?.startsWith("Connections"))!.click());
+      await p.waitForFunction(() => [...document.querySelectorAll("button")].some((b) => b.textContent?.includes("Add a connection")));
+      await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.includes("Add a connection"))!.click());
+      await p.waitForSelector("#service-address");
+      await p.type("#service-address", "http://localhost:3413/mcp");
+      await p.keyboard.press("Enter");
+      await p.waitForFunction(() => document.querySelector(".add-service[role=status]")?.textContent?.includes("Items 2.1, an MCP service. It doesn't ask who you are. It offers 4 tools: 2 read, 1 doesn't say what it does, 1 changes things."));
+      // Connect waits for the warning to be read and confirmed.
+      expect(await p.$eval(".modal [data-dialog-action]", (b) => (b as HTMLButtonElement).disabled)).toBe(true);
+      await p.evaluate(() => [...document.querySelectorAll<HTMLLabelElement>(".notice.warning label")][0]!.click());
+      await p.click(".modal [data-dialog-action]");
+      // Review opens next: the read tools are on; Try it shows the service's answer.
+      await p.waitForSelector(".tool-group");
+      await p.waitForFunction(() => [...document.querySelectorAll(".tool-group legend")].some((l) => l.textContent === "In the side panel"));
+      expect(await p.$$eval(".tool-group legend", (l) => l.map((x) => x.textContent))).toEqual(["Read", "Doesn't say", "Changes things", "In the side panel"]);
+      await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".modal button")].find((b) => b.textContent === "Try it")!.click());
+      await p.waitForFunction(() => document.querySelector(".tool-tried pre")?.textContent?.includes("First item"));
+      await p.click(".modal [data-dialog-action]");
+      await p.waitForFunction(() => !document.querySelector(".tool-group"));
+      await p.waitForFunction(() => document.body.textContent?.includes("no sign-in · 2 of 3 tools on"));
+      // From your connections (F33 step 4): on in Review, then the open note's title looks it up.
+      await p.evaluate(() => [...document.querySelectorAll<HTMLLIElement>(".connection-list li")].find((li) => li.textContent?.includes("Items"))!.querySelector<HTMLButtonElement>("button")!.click());
+      await p.waitForFunction(() => [...document.querySelectorAll(".tool-group legend")].some((l) => l.textContent === "In the side panel"));
+      await p.evaluate(() => [...document.querySelectorAll<HTMLLabelElement>(".tool-group label")].find((l) => l.textContent?.includes("Look up the open note"))!.click());
+      await until(async () => ((await api("/me/connections")).connections as { panel: string | null }[]).some((c) => c.panel === "search_items"));
+      await p.evaluate(() => document.querySelector<HTMLButtonElement>(".modal [data-dialog-action]")!.click());
+      await p.waitForFunction(() => !document.querySelector(".tool-group"));
+      const n = await note("Panel lookup.md", "Words that stay here.");
+      await p.goto(`${BASE}/v/${vaultId}/n/${n.id}`, { waitUntil: "load" });
+      await p.waitForFunction(() => document.querySelector(".from-connections")?.textContent?.includes("About Panel lookup"), { timeout: 10000 });
+      expect(JSON.stringify(service.seen)).not.toContain("Words that stay here");
+    } finally {
+      for (const c of ((await api("/me/connections")) as { connections: { id: number }[] }).connections) await api(`/me/connections/${c.id}`, undefined, "DELETE").catch(() => {});
+      service.stop();
+      await p.close();
+    }
+  });
+
   test("one Settings screen: the gear opens This vault, the account button Account, and ⌘K finds a section by what it's about", async () => {
     const p = await open(`/v/${vaultId}`);
     await p.waitForSelector(".tree-row");
@@ -1311,7 +1854,20 @@ describe("Settings (F17)", () => {
     await p.click("button.account");
     await p.waitForSelector(".settings-nav [aria-current=page]");
     expect(await current(p)).toStartWith("Account");
-    expect(await modalText(p)).toContain("Change password");
+    // How you sign in (F40) loads with the account's state, a moment after the rest.
+    await p.waitForFunction(() => document.querySelector(".modal")?.textContent?.includes("Change password"));
+    expect(await modalText(p)).toContain("Two-step sign-in");
+    // Reminders (F35): the switch and the time save at once and come back as saved.
+    await p.waitForSelector("#reminder-time");
+    expect(await p.$eval("#reminder-time", (e) => (e as HTMLInputElement).value)).toBe("09:00");
+    await p.$eval("#reminder-time", (e) => {
+      const input = e as HTMLInputElement;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "07:45");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await p.waitForFunction(() => document.querySelector(".toast")?.textContent?.includes("Reminders at 07:45"));
+    expect((await p.evaluate(() => fetch("/api/me/reminders?days=1").then((r) => r.json()))).time).toBe("07:45");
+    await p.evaluate(() => fetch("/api/me/reminders", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ time: "09:00" }) }));
     await closeAll(p);
     for (const [words, section, shows] of [["github token", "Connections", "GitHub"], ["members", "Collection settings", "Members"], ["api key", "AI assistants", "AI assistants"]] as const) {
       await p.keyboard.down("Meta");
@@ -1373,6 +1929,27 @@ describe("share from iPhone", () => {
   });
 });
 
+describe("the iPhone app (L8)", () => {
+  test("in the app, Share from iPhone says the app set sharing up; in Safari it offers the Shortcut", async () => {
+    const p = await open(`/health`, true);
+    await p.setUserAgent("Mozilla/5.0 (iPhone; CPU iPhone OS 27_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Safari/604.1 CommonplaceApp/1.0");
+    await p.goto(`${BASE}/v/${vaultId}`);
+    const shareText = async (page: Page) => {
+      // On a phone the account button is in the folded-away file panel.
+      await page.waitForSelector("button.account");
+      await page.evaluate(() => document.querySelector<HTMLButtonElement>("button.account")!.click());
+      await page.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".settings-nav button")].find((b) => b.textContent?.startsWith("Connections"))!.click());
+      await page.waitForFunction(() => [...document.querySelectorAll(".modal h3")].some((h) => h.textContent === "Share from iPhone"));
+      return page.evaluate(() => [...document.querySelectorAll(".modal h3")].find((h) => h.textContent === "Share from iPhone")!.nextElementSibling!.textContent ?? "");
+    };
+    expect(await shareText(p)).toContain("This app set it up when you signed in");
+    await p.close();
+    const safari = await open(`/v/${vaultId}`, true);
+    expect(await shareText(safari)).toContain("Apple Shortcut");
+    await safari.close();
+  });
+});
+
 describe("connect Claude (MCP)", () => {
   beforeAll(freshBrowser);
   test("Settings → Connections makes an MCP token and shows the Claude Code command; the token works, then revokes", async () => {
@@ -1388,7 +1965,7 @@ describe("connect Claude (MCP)", () => {
     expect(cmd).toContain(`${BASE}/mcp`);
     const list = () =>
       fetch(`${BASE}/mcp`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
-    expect((await (await list()).json()).result.tools.length).toBe(17);
+    expect((await (await list()).json()).result.tools.length).toBe(18);
     await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".capture-setup button")].find((b) => b.textContent === "Done")!.click());
     await p.waitForFunction(() => [...document.querySelectorAll(".members li")].some((li) => li.textContent?.includes("read and write")));
     await p.evaluate(() =>
@@ -1537,6 +2114,19 @@ describe("bring your own AI", () => {
     await p.close();
   });
 
+  test("on the iPhone the formatting bar is one row, and keeps no room for the home indicator while the keyboard is up (N16)", async () => {
+    const n = await note("Phone bar.md", "# Phone bar\n");
+    const p = await openNote(n.id, true);
+    await p.waitForSelector(".format-bar.only-touch");
+    // Headless Chrome has no keyboard or home indicator: the class main.tsx sets when the
+    // keyboard takes the screen, and the rule it turns on, are what's checked here.
+    await p.evaluate(() => document.documentElement.classList.add("keyboard-up"));
+    const bar = await p.$eval(".format-bar", (e) => ({ pad: getComputedStyle(e).paddingBottom, h: e.getBoundingClientRect().height, b: e.querySelector("button")!.getBoundingClientRect().height }));
+    expect(bar.pad).toBe("4px");
+    expect(bar.h).toBeLessThan(bar.b * 1.5);
+    await p.close();
+  });
+
   test("on the iPhone, @Claude opens a bottom sheet over the formatting bar", async () => {
     const n = await note("Phone plan.md", "# Phone plan\n\n");
     const p = await openNote(n.id, true);
@@ -1554,6 +2144,32 @@ describe("bring your own AI", () => {
     expect(sheet.y + sheet.height).toBeGreaterThan(800); // at the bottom of the 844 pt screen
     await p.click('.ai-sheet button[aria-label="Discard"]');
     await p.waitForSelector(".ai-sheet", { hidden: true });
+    await p.close();
+  });
+
+  test("Reflect on this week (F24): ⌘K hands the assistant the week's journal and a request, in the side panel", async () => {
+    const rv = (await api("/vaults", { name: "Reflect UI" })).id;
+    await api("/me/home", { vaultId: rv }, "PUT");
+    const day = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    await api("/journal", { text: "Fixed the fence; felt good.", vaultId: rv, day: day(new Date(Date.now() - 2 * 86_400_000)), time: "18:00" });
+    await api("/journal", { text: "Long month, glad it's over.", vaultId: rv, day: day(new Date(Date.now() - 20 * 86_400_000)), time: "09:00" });
+    fake.script.push({ text: "A steady, practical week." });
+    const p = await open(`/v/${rv}`);
+    await p.waitForSelector(".vault-home, .tree-row, main");
+    await p.keyboard.down("Meta");
+    await p.keyboard.press("k");
+    await p.keyboard.up("Meta");
+    await p.waitForSelector(".palette input");
+    await p.keyboard.type("Reflect on this week");
+    await Bun.sleep(150);
+    await p.keyboard.press("Enter");
+    await p.waitForFunction(() => document.querySelector(".ai-panel .ai-reply")?.textContent?.includes("A steady, practical week."));
+    const sent = JSON.stringify(fake.seen.at(-1)!.body);
+    expect(sent).toContain("Reflect on my journal for the past week");
+    expect(sent).toContain("Fixed the fence; felt good.");
+    expect(sent).not.toContain("Long month"); // older than the week
+    await api("/me/home", { vaultId }, "PUT");
+    await p.evaluate(() => localStorage.setItem("cp:rightTab", "links")); // as the tests after expect
     await p.close();
   });
 });
@@ -1627,8 +2243,164 @@ describe("types (F16)", () => {
     await until(async () => (await read("Meetings/Kickoff.md"))?.includes('attendees:\n  - "[[Sam]]"') ?? false, 8000);
     await p.close();
     const s = await openNote(sam);
-    await s.waitForFunction(() => [...document.querySelectorAll(".right-panel h3")].some((h) => h.textContent?.startsWith("As attendees")));
+    await s.waitForFunction(() => [...document.querySelectorAll(".relationships h4")].some((h) => h.textContent === "As attendees"));
     await s.close();
+  });
+
+  test("Add relationship (F27): a linked note comes first; the other side says 'Has part'", async () => {
+    const guide = await note("Guides/Onboarding.md", "# Onboarding\n");
+    const page = await note("Guides/Checklist.md", "# Checklist\n\nThe first week, from [[Onboarding]].\n");
+    const p = await openNote(page.id);
+    await p.waitForSelector(".cm-content");
+    await p.keyboard.down("Meta");
+    await p.keyboard.press("k");
+    await p.keyboard.up("Meta");
+    await p.waitForSelector(".palette input");
+    await p.keyboard.type("add relationship");
+    await p.waitForFunction(() => [...document.querySelectorAll(".palette .palette-title")].some((e) => e.textContent === "Add relationship"));
+    await p.evaluate(() => [...document.querySelectorAll<HTMLElement>(".palette .palette-title")].find((e) => e.textContent === "Add relationship")!.click());
+    // The relationship builder (F31): the kind box has focus; type to filter, Enter to choose.
+    await p.waitForSelector('.rel-builder [data-combo="kind"]:focus');
+    expect(await p.$eval('.rel-builder [data-combo="first"]', (e) => (e as HTMLInputElement).value)).toBe("Checklist");
+    await p.keyboard.type("part of");
+    await Bun.sleep(100);
+    await p.keyboard.press("Enter");
+    // Then which note, focus having moved on: the one it links to in its text is offered first.
+    await p.waitForSelector('.rel-builder [data-combo="second"]:focus');
+    await p.waitForFunction(() => (document.querySelector(".combo-list li")?.textContent ?? "").includes("Onboarding"));
+    await p.keyboard.press("Enter");
+    // The sentence is read out as it's made; Enter on Add saves it.
+    await p.waitForFunction(() => document.querySelector(".rel-said")?.textContent === "Checklist part of Onboarding");
+    expect(await p.$eval(".rel-said", (e) => e.getAttribute("aria-live"))).toBe("polite");
+    await p.waitForSelector(".rel-builder [data-dialog-action]:focus");
+    await p.keyboard.press("Enter");
+    await until(async () => (await read("Guides/Checklist.md"))?.startsWith('---\npart-of: "[[Onboarding]]"\n---\n') ?? false, 8000);
+    // Shown as a relationship (pills), not text.
+    await p.waitForSelector('.prop-row[data-key="part-of"] .link-pill');
+    await p.close();
+    const g = await openNote(guide.id);
+    await g.waitForFunction(() => [...document.querySelectorAll(".relationships h4")].some((h) => h.textContent === "Has part"));
+    await g.close();
+  });
+
+  test("own kinds of relationship (F31): offered first in Add relationship, and named the other way round on the other note", async () => {
+    const kinds = await note("Relationships.md", "# Relationships\n\n| Relationship | Other direction | Meaning |\n| --- | --- | --- |\n| comes before | comes after | Happens first |\n");
+    const loft = await note("Build/Ceiling.md", "# Ceiling\n");
+    const roof = await note("Build/Joists.md", "# Joists\n\nThen the [[Ceiling]].\n");
+    try {
+      const p = await openNote(roof.id);
+      await p.waitForSelector(".cm-content");
+      await p.keyboard.down("Meta");
+      await p.keyboard.press("k");
+      await p.keyboard.up("Meta");
+      await p.waitForSelector(".palette input");
+      await p.keyboard.type("add relationship");
+      await p.waitForFunction(() => [...document.querySelectorAll(".palette .palette-title")].some((e) => e.textContent === "Add relationship"));
+      await p.evaluate(() => [...document.querySelectorAll<HTMLElement>(".palette .palette-title")].find((e) => e.textContent === "Add relationship")!.click());
+      await p.waitForSelector('.rel-builder [data-combo="kind"]:focus');
+      // The collection's own kind comes first, with its meaning.
+      await p.waitForFunction(() => (document.querySelector(".combo-list li")?.textContent ?? "").includes("comes before"));
+      expect(await p.$eval(".combo-list li", (e) => e.textContent)).toContain("Happens first");
+      await p.keyboard.press("Enter");
+      await p.waitForSelector('.rel-builder [data-combo="second"]:focus');
+      await p.keyboard.type("Ceiling");
+      await Bun.sleep(100);
+      await p.keyboard.press("Enter");
+      await p.waitForFunction(() => document.querySelector(".rel-said")?.textContent === "Joists comes before Ceiling");
+      // Swap reads it from Ceiling: the other way round's name, the same relationship.
+      await p.click('.rel-builder button[aria-label="Swap: read it from the other note"]');
+      await p.waitForFunction(() => document.querySelector(".rel-said")?.textContent === "Ceiling comes after Joists");
+      await p.click(".rel-builder [data-dialog-action]");
+      await until(async () => (await read("Build/Joists.md"))?.startsWith('---\ncomes-before: "[[Ceiling]]"\n---\n') ?? false, 8000);
+      // Undo takes it out again.
+      await p.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => t.textContent?.includes("Ceiling comes after Joists")));
+      await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".toast-action")].find((b) => b.textContent === "Undo")!.click());
+      await until(async () => !(await read("Build/Joists.md"))?.includes("comes-before"), 8000);
+      // And again, from Ceiling's side, choosing the other way round: written into Joists all the same.
+      await p.goto(`${BASE}/v/${vaultId}/n/${loft.id}`);
+      await p.waitForSelector(".cm-content");
+      await p.keyboard.down("Meta");
+      await p.keyboard.press("k");
+      await p.keyboard.up("Meta");
+      await p.waitForSelector(".palette input");
+      await p.keyboard.type("add relationship");
+      await p.waitForFunction(() => [...document.querySelectorAll(".palette .palette-title")].some((e) => e.textContent === "Add relationship"));
+      await p.evaluate(() => [...document.querySelectorAll<HTMLElement>(".palette .palette-title")].find((e) => e.textContent === "Add relationship")!.click());
+      await p.waitForSelector('.rel-builder [data-combo="kind"]:focus');
+      await p.keyboard.type("comes after");
+      await Bun.sleep(100);
+      await p.keyboard.press("Enter");
+      await p.waitForSelector('.rel-builder [data-combo="second"]:focus');
+      await p.keyboard.type("Joists");
+      await Bun.sleep(300);
+      await p.keyboard.press("Enter");
+      await p.waitForFunction(() => document.querySelector(".rel-said")?.textContent === "Ceiling comes after Joists");
+      await p.keyboard.press("Enter");
+      await until(async () => (await read("Build/Joists.md"))?.startsWith('---\ncomes-before: "[[Ceiling]]"\n---\n') ?? false, 8000);
+      await p.close();
+      const l = await openNote(loft.id);
+      // The side panel's Relationships (step 4): read from Ceiling, under the other direction's name.
+      const row = 'button[aria-label="Ceiling comes after Joists"]';
+      await l.waitForSelector(`.relationships ${row}`);
+      expect(await l.$eval(".relationships h4", (h) => h.textContent)).toBe("Comes after");
+      const menu = (said: string) => `.relationships button[aria-label="Change “${said}”"]`;
+      const pick = async (start: string) => {
+        await l.waitForSelector(".menu-item:focus");
+        await l.waitForFunction((t) => [...document.querySelectorAll(".menu-item")].some((m) => m.textContent?.startsWith(t)), {}, start);
+        await l.evaluate((t) => [...document.querySelectorAll<HTMLElement>(".menu-item")].find((m) => m.textContent?.startsWith(t))!.click(), start);
+      };
+      const undo = async (what: string) => {
+        await l.waitForFunction((w) => [...document.querySelectorAll(".toast")].some((t) => t.textContent?.includes(w)), {}, what);
+        await l.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".toast-action")].filter((b) => b.textContent === "Undo").pop()!.click());
+      };
+      // Reverse, by keyboard: taken out of Joists, written into Ceiling as "comes after", the same relationship.
+      await l.focus(menu("Ceiling comes after Joists"));
+      await l.keyboard.press("Enter");
+      await l.waitForSelector(".menu-item:focus");
+      for (let i = 0; i < 3; i++) await l.keyboard.press("ArrowDown");
+      expect(await l.evaluate(() => document.activeElement?.textContent)).toContain("Reverse: keep it in this note");
+      await l.keyboard.press("Enter");
+      await until(async () => (await read("Build/Ceiling.md"))?.startsWith('---\ncomes-after: "[[Joists]]"\n---\n') ?? false, 8000);
+      await until(async () => !(await read("Build/Joists.md"))?.includes("comes-before"), 8000);
+      await l.waitForSelector(`.relationships li[data-kept="here"] ${row}`);
+      // One Undo puts both notes back.
+      await undo("Reversed");
+      await until(async () => !(await read("Build/Ceiling.md"))?.includes("comes-after"), 8000);
+      await until(async () => (await read("Build/Joists.md"))?.includes('comes-before: "[[Ceiling]]"') ?? false, 8000);
+      // Swap turns it round: Ceiling comes before Joists, kept in Ceiling.
+      await l.waitForSelector(`.relationships li[data-kept="there"] ${row}`);
+      await l.click(menu("Ceiling comes after Joists"));
+      await pick("Swap: Ceiling comes before Joists");
+      await until(async () => (await read("Build/Ceiling.md"))?.includes('comes-before: "[[Joists]]"') ?? false, 8000);
+      await until(async () => !(await read("Build/Joists.md"))?.includes("comes-before"), 8000);
+      await l.waitForSelector(`.relationships button[aria-label="Ceiling comes before Joists"]`);
+      // Remove, and Undo.
+      await l.click(menu("Ceiling comes before Joists"));
+      await pick("Remove");
+      await until(async () => !(await read("Build/Ceiling.md"))?.includes("comes-before"), 8000);
+      await undo("Removed: Ceiling comes before Joists");
+      await until(async () => (await read("Build/Ceiling.md"))?.includes('comes-before: "[[Joists]]"') ?? false, 8000);
+      // Change… opens the builder on it; choosing another kind replaces it.
+      await l.waitForSelector(menu("Ceiling comes before Joists"));
+      await l.click(menu("Ceiling comes before Joists"));
+      await pick("Change");
+      await l.waitForFunction(() => document.querySelector(".rel-said")?.textContent === "Ceiling comes before Joists");
+      await l.click('.rel-builder [data-combo="kind"]');
+      await l.keyboard.type("depends on");
+      await Bun.sleep(100);
+      await l.keyboard.press("Enter");
+      await l.waitForFunction(() => document.querySelector(".rel-said")?.textContent === "Ceiling depends on Joists");
+      expect(await l.$eval(".rel-builder [data-dialog-action]", (b) => b.textContent)).toBe("Change");
+      await l.click(".rel-builder [data-dialog-action]");
+      await until(async () => {
+        const c = (await read("Build/Ceiling.md")) ?? "";
+        return c.includes('depends-on: "[[Joists]]"') && !c.includes("comes-before");
+      }, 8000);
+      await l.close();
+    } finally {
+      // Leave the collection as other tests expect it, pass or fail.
+      for (const n of [kinds, loft, roof]) await api(`/vaults/${vaultId}/notes/${n.id}`, undefined, "DELETE");
+    }
   });
 
   test("New type offers starters: one click adds Book, and existing types show as added", async () => {
@@ -1899,6 +2671,130 @@ describe("small wins", () => {
   });
 });
 
+describe("writing blocks (F28)", () => {
+  beforeAll(freshBrowser);
+  const md = "# Plan\n\n[TOC]\n\n## Goals\n\nWhere we are: :status[On track]{.green}\n\n> [!note]- Details\n> Hidden text\n\n## Risks\n\nNone yet.\n";
+
+  test("Live Preview: contents, a status label, and a callout that folds", async () => {
+    const n = await note("Blocks/Plan.md", md);
+    const p = await openNote(n.id);
+    await p.waitForSelector(".cm-lp-toc .toc-link");
+    expect(await p.$$eval(".cm-lp-toc .toc-link", (l) => l.map((e) => e.textContent))).toEqual(["Goals", "Risks"]);
+    expect(await p.$eval(".cm-content .status.status-green", (e) => e.textContent)).toBe("On track");
+    expect(await p.$eval(".cm-content", (e) => e.textContent)).not.toContain(":status[");
+    // Closed: only the title shows; the chevron opens it, without changing the text.
+    expect(await p.$eval(".cm-content", (e) => e.textContent)).not.toContain("Hidden text");
+    await p.evaluate(() => document.querySelector(".cm-lp-fold")!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true })));
+    await p.waitForFunction(() => document.querySelector(".cm-content")!.textContent!.includes("Hidden text"));
+    expect((await api(`/vaults/${vaultId}/notes/${n.id}`)).content).toBe(md);
+    // A contents entry moves the cursor to its heading.
+    await p.evaluate(() => [...document.querySelectorAll(".cm-lp-toc .toc-link")].find((a) => a.textContent === "Risks")!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true })));
+    // Its source shows, as on any line the cursor is on.
+    await p.waitForFunction(() => document.querySelector(".cm-content")!.textContent!.includes("## Risks"));
+    await p.close();
+  });
+
+  test("reading view: the same blocks, the callout as a <details>", async () => {
+    const n = await note("Blocks/Plan read.md", md);
+    const p = await openNote(n.id);
+    await p.evaluate(() => document.querySelector<HTMLButtonElement>('.segmented button[title="Reading view"]')!.click());
+    await p.waitForSelector(".preview .toc-link");
+    expect(await p.$$eval(".preview .toc-link", (l) => l.map((e) => e.textContent))).toEqual(["Goals", "Risks"]);
+    expect(await p.$eval(".preview .status.status-green", (e) => e.textContent)).toBe("On track");
+    expect(await p.$eval(".preview details.callout", (e) => (e as HTMLDetailsElement).open)).toBe(false);
+    expect(await p.$eval(".preview details.callout summary", (e) => e.textContent)).toBe("Details");
+    // The view is remembered: put Live Preview back for the tests after.
+    await p.evaluate(() => document.querySelector<HTMLButtonElement>('.segmented button[title="Live preview"]')!.click());
+    await p.close();
+  });
+
+  test("a note's look: emoji icon, cover and wide page; a web address alone is a card; :rocket", async () => {
+    const page = Bun.serve({
+      port: 3288,
+      fetch: () => new Response(`<head><meta property="og:title" content="Harbour walk"><meta property="og:description" content="Five miles by the sea."></head>`, { headers: { "content-type": "text/html" } }),
+    });
+    try {
+      // A real picture for the cover (a missing one would log a 404).
+      const form = new FormData();
+      form.append("file", new File([Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0))], "harbour.png", { type: "image/png" }));
+      const up = await fetch(`${BASE}/api/vaults/${vaultId}/files`, { method: "POST", headers: { cookie, origin: BASE }, body: form });
+      expect(((await up.json()) as { path: string }).path).toBe("attachments/harbour.png");
+      const n = await note("Look.md", '---\nicon: 🚀\ncover: "[[attachments/harbour.png]]"\nwidth: wide\n---\n# Look\n\nhttp://localhost:3288/walk\n\n');
+      const p = await openNote(n.id);
+      await p.waitForSelector(".note-title .note-icon");
+      expect(await p.$eval(".note-title .note-icon", (e) => e.textContent)).toBe("🚀");
+      await p.waitForFunction(() => [...document.querySelectorAll(".tree-label")].some((l) => l.textContent === "🚀Look"));
+      expect(await p.$eval(".note-cover img", (e) => (e as HTMLImageElement).src)).toContain("files?path=attachments%2Fharbour.png");
+      expect(await p.$(".note-view.width-wide")).not.toBeNull();
+      await p.waitForSelector(".cm-lp-webcard .web-card-title");
+      expect(await p.$eval(".cm-lp-webcard .web-card-title", (e) => e.textContent)).toBe("Harbour walk");
+      expect(await p.$eval(".cm-lp-webcard .web-card-site", (e) => e.textContent)).toBe("localhost");
+      // :rocke offers the rocket; Enter writes the emoji itself.
+      await p.focus(".cm-content");
+      await p.keyboard.down("Meta");
+      await p.keyboard.press("ArrowDown");
+      await p.keyboard.up("Meta");
+      await p.keyboard.type("Launch :rocke");
+      await p.waitForFunction(() => document.querySelector(".cm-tooltip-autocomplete li[aria-selected]")?.textContent?.includes("rocket"));
+      await Bun.sleep(150);
+      await p.keyboard.press("Enter");
+      await until(async () => (await api(`/vaults/${vaultId}/notes/${n.id}`)).content.includes("Launch 🚀"), 8000);
+      await p.close();
+    } finally {
+      page.stop(true);
+    }
+  });
+
+  test("// offers dates and writes the one chosen as YYYY-MM-DD", async () => {
+    const n = await note("Blocks/Due.md", "# Due\n\n");
+    const p = await openNote(n.id);
+    await p.waitForSelector(".cm-content", { visible: true });
+    await p.click(".cm-content");
+    await p.keyboard.down("Meta");
+    await p.keyboard.press("ArrowDown");
+    await p.keyboard.up("Meta");
+    await p.keyboard.type("Due //tom");
+    await p.waitForFunction(() => document.querySelector(".cm-tooltip-autocomplete li[aria-selected]")?.textContent?.includes("Tomorrow"));
+    await Bun.sleep(150); // CodeMirror ignores Enter for 75 ms after the list changes
+    await p.keyboard.press("Enter");
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    await until(async () => (await api(`/vaults/${vaultId}/notes/${n.id}`)).content.includes(`Due ${iso}`), 8000);
+    await p.close();
+  });
+
+  test("full-width editor: the text fills the space between the panels and follows them; remembered", async () => {
+    const n = await note("Full width.md", "# Full width\n\nA line of text.\n");
+    const p = await openNote(n.id);
+    await p.waitForSelector(".app.ready");
+    const text = () => p.$eval(".cm-content", (e) => e.getBoundingClientRect().width);
+    const room = () => p.$eval(".cm-scroller", (e) => e.clientWidth);
+    const fills = async () => Math.abs((await text()) - (await room())) < 2;
+    const files = () => p.click('button[aria-label="Files"]');
+    // With the file panel closed there's more room than the reading width uses.
+    await files();
+    await until(async () => (await room()) > 900);
+    expect(await text()).toBeLessThanOrEqual(760);
+    await p.click('button[aria-label="Full-width editor"]');
+    await until(async () => (await text()) > 900 && (await fills()));
+    expect(await p.$eval('button[aria-label="Full-width editor"]', (e) => e.getAttribute("aria-pressed"))).toBe("true");
+    // Opening the panel again narrows it to fit, and it still fills its column.
+    const wide = await text();
+    await files();
+    await until(async () => (await text()) < wide - 200 && (await fills()));
+    // Kept after a reload; the button puts it back to normal.
+    await p.reload({ waitUntil: "load" });
+    await p.waitForSelector(".app.full-width .cm-content");
+    await files();
+    await until(async () => (await room()) > 900 && (await fills()));
+    await p.click('button[aria-label="Full-width editor"]');
+    await until(async () => (await text()) <= 760);
+    await files();
+    await p.close();
+  });
+});
+
 describe("weblinks", () => {
   beforeAll(freshBrowser);
   const page = Bun.serve({
@@ -1974,6 +2870,14 @@ describe("offline on the iPhone (F4)", () => {
   }, 60000);
 });
 
+/** An app registered for MCP sign-in (F25), and the consent page's address for it. */
+async function oauthClient(name: string) {
+  const back = `${BASE}/oauth-test-callback`;
+  const reg = await (await fetch(`${BASE}/oauth/register`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ client_name: name, redirect_uris: [back.replace("localhost", "127.0.0.1")], token_endpoint_auth_method: "none" }) })).json();
+  const q = new URLSearchParams({ response_type: "code", client_id: reg.client_id, redirect_uri: back.replace("localhost", "127.0.0.1"), code_challenge: "c".repeat(43), code_challenge_method: "S256", state: "ui" });
+  return `/oauth/authorize?${q}`;
+}
+
 describe("accessibility (axe)", () => {
   // WCAG 2.1 A and AA, on the main screens, laptop and iPhone, light and dark. Serious and
   // critical problems fail; A11Y_REPORT=1 prints every finding.
@@ -2014,6 +2918,9 @@ describe("accessibility (axe)", () => {
         await p.goto(`${BASE}/v/${vaultId}/tasks`);
         await p.waitForFunction(() => document.body.innerText.includes("Choose tiles"));
         problems.push(...(await audit(p, `${tag} tasks`)));
+        await p.goto(`${BASE}/v/${vaultId}/journal`);
+        await p.waitForSelector(".journal-day, .journal-main .muted");
+        problems.push(...(await audit(p, `${tag} journal`)));
         await p.goto(`${BASE}/v/${vaultId}/graph?type=Gadget`);
         await p.waitForSelector(".graph-bar");
         await p.click(".graph-bar button[aria-expanded]");
@@ -2050,6 +2957,15 @@ describe("accessibility (axe)", () => {
       }
       await p.close();
     }
+    // An app asking to sign in (F25), laptop and iPhone, light and dark.
+    for (const phone of [false, true])
+      for (const scheme of ["light", "dark"] as const) {
+        const p = await open(await oauthClient("Claude"), phone);
+        await p.emulateMediaFeatures([{ name: "prefers-color-scheme", value: scheme }]);
+        await p.waitForSelector(".consent h2");
+        problems.push(...(await audit(p, `${phone ? "iPhone" : "laptop"} ${scheme} sign-in consent`)));
+        await p.close();
+      }
     // The help: its start, a page with pictures and one with tables, in both themes.
     for (const scheme of ["light", "dark"] as const) {
       const p = await open(`/v/${vaultId}`);
@@ -2181,6 +3097,404 @@ describe("website (F18)", () => {
       }
     }
     expect(problems).toEqual([]);
+  });
+});
+
+describe("editor usability, release 1", () => {
+  beforeAll(freshBrowser);
+  const raw = async (id: number) => (await api(`/vaults/${vaultId}/notes/${id}`)).content as string;
+  const endOfDoc = async (p: Page) => {
+    await p.focus(".cm-content");
+    await p.keyboard.down("Meta");
+    await p.keyboard.press("ArrowDown");
+    await p.keyboard.up("Meta");
+  };
+  const pick = async (p: Page, label: string) => {
+    await p.waitForFunction((l) => document.querySelector(".cm-tooltip-autocomplete li[aria-selected]")?.textContent?.includes(l), {}, label);
+    await Bun.sleep(150); // CodeMirror ignores Enter for 75 ms after the list changes
+    await p.keyboard.press("Enter");
+  };
+
+  test("[[ offers a note's headings after # and finds notes by alias, keeping the alias as the words", async () => {
+    await note("Usability/Bread.md", "---\naliases: [Sourdough]\n---\n# Bread\n\n## Starter\n\n## Bake\n");
+    const n = await note("Usability/Links.md", "# Links\n");
+    const p = await openNote(n.id);
+    await endOfDoc(p);
+    await p.keyboard.press("Enter");
+    await p.keyboard.type("[[Bread#Ba");
+    await pick(p, "Bake");
+    await until(async () => (await raw(n.id)).includes("[[Bread#Bake]]"));
+    await endOfDoc(p);
+    await p.keyboard.press("Enter");
+    await p.keyboard.type("[[Sourdo");
+    await pick(p, "Sourdough");
+    await until(async () => (await raw(n.id)).includes("[[Bread|Sourdough]]"));
+    // [[# is this note's own headings.
+    await endOfDoc(p);
+    await p.keyboard.press("Enter");
+    await p.keyboard.type("[[#Li");
+    await pick(p, "Links");
+    await until(async () => (await raw(n.id)).includes("[[#Links]]"));
+    await p.close();
+  });
+
+  test("word count and reading time, and the selection's count", async () => {
+    const n = await note("Usability/Count.md", "---\ntags: [x]\n---\n# Count\n\none two three\n");
+    const p = await openNote(n.id);
+    const stats = () => p.evaluate(() => document.querySelector(".note-stats")?.textContent ?? "");
+    await until(async () => (await stats()) === "4 words · 1 min read");
+    await p.focus(".cm-content");
+    await p.keyboard.down("Meta");
+    await p.keyboard.press("KeyA");
+    await p.keyboard.up("Meta");
+    await until(async () => (await stats()) === "4 of 4 words");
+    await p.close();
+  });
+
+  test("a pasted picture is named after the note", async () => {
+    const n = await note("Usability/Paste test.md", "# Paste test\n\n");
+    const p = await openNote(n.id);
+    await endOfDoc(p);
+    await p.evaluate(() => {
+      const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
+      const dt = new DataTransfer();
+      dt.items.add(new File([png], "image.png", { type: "image/png" }));
+      document.querySelector(".cm-content")!.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+    });
+    await until(async () => /!\[\[attachments\/Paste test\.(png|jpg|webp)\]\]/.test(await raw(n.id)), 10000);
+    await p.close();
+  });
+
+  test("a note reopens where you left it", async () => {
+    const lines = Array.from({ length: 120 }, (_, i) => `Line ${i + 1} of the long note.`).join("\n\n");
+    const n = await note("Usability/Long.md", `# Long\n\n${lines}\n`);
+    const p = await openNote(n.id);
+    await p.waitForSelector(".cm-content");
+    // Scroll well down, then click a line there (CodeMirror only draws the lines on screen).
+    await p.$eval(".cm-scroller", (e) => (e.scrollTop = 2000));
+    await Bun.sleep(200);
+    const at = await p.evaluate(() => {
+      const box = document.querySelector(".cm-scroller")!.getBoundingClientRect();
+      const line = [...document.querySelectorAll(".cm-line")].find((l) => l.getBoundingClientRect().top > box.top + box.height / 2 && /^Line \d+/.test(l.textContent ?? ""))!;
+      const r = line.getBoundingClientRect();
+      return { x: r.left + 40, y: r.top + r.height / 2, text: line.textContent! };
+    });
+    await p.mouse.click(at.x, at.y);
+    await Bun.sleep(600); // saved 400 ms after the last move
+    await p.reload({ waitUntil: "load" });
+    await p.waitForSelector(".cm-content");
+    await until(async () => (await p.$eval(".cm-scroller", (e) => e.scrollTop)) > 1500);
+    await p.focus(".cm-content");
+    await p.keyboard.type("XYZ");
+    // Typed into the line that was clicked.
+    await until(async () => (await raw(n.id)).split("\n").some((l) => l.includes("XYZ") && l.replace("XYZ", "") === at.text));
+    await p.close();
+  });
+
+  test("code: coloured, its language picked from the bar, Copy in reading view", async () => {
+    const n = await note("Usability/Code.md", "# Code\n\n```\nconst a = 1; // one\n```\n\nAfter.\n");
+    const p = await openNote(n.id);
+    await p.waitForSelector(".cm-lp-codebar .cm-lp-codelang");
+    expect(await p.$eval(".cm-lp-codelang", (e) => e.textContent)).toBe("Plain text");
+    expect(await p.$(".cm-content .tok-keyword")).toBeNull();
+    await p.click(".cm-lp-codelang");
+    await p.waitForSelector("[data-dialog-input]");
+    await p.keyboard.type("TypeScript");
+    await p.keyboard.press("Enter");
+    await until(async () => (await raw(n.id)).includes("```ts\nconst a"));
+    await p.waitForFunction(() => document.querySelector(".cm-content .tok-keyword")?.textContent === "const");
+    expect(await p.$eval(".cm-lp-codelang", (e) => e.textContent)).toBe("TypeScript");
+    await p.evaluate(() => document.querySelector<HTMLButtonElement>('.segmented button[title="Reading view"]')!.click());
+    await p.waitForSelector(".preview .code-block .tok-comment");
+    expect(await p.$eval(".preview .code-lang", (e) => e.textContent)).toBe("TypeScript");
+    const ctx = p.browserContext();
+    await ctx.overridePermissions(BASE, ["clipboard-read", "clipboard-write", "clipboard-sanitized-write"]);
+    await p.click(".preview .code-copy");
+    await until(async () => (await p.evaluate(() => navigator.clipboard.readText())) === "const a = 1; // one");
+    await p.evaluate(() => document.querySelector<HTMLButtonElement>('.segmented button[title="Live preview"]')!.click());
+    await p.close();
+  });
+
+  test("a click on a picture shows it on its own; Escape closes it", async () => {
+    const form = new FormData();
+    form.append("file", new File([Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0))], "zoom.png", { type: "image/png" }));
+    await fetch(`${BASE}/api/vaults/${vaultId}/files`, { method: "POST", body: form, headers: { cookie } });
+    const n = await note("Usability/Zoom.md", "# Zoom\n\n![[attachments/zoom.png|200]]\n\nText.\n");
+    const p = await openNote(n.id);
+    await p.waitForSelector(".cm-lp-image");
+    await p.click(".cm-lp-image");
+    await p.waitForSelector(".lightbox img");
+    expect(await p.$eval(".lightbox img", (e) => (e as HTMLImageElement).src)).toContain("zoom.png");
+    await p.keyboard.press("Escape");
+    await until(async () => (await p.$(".lightbox")) === null);
+    // The note itself didn't change, and the line didn't open for editing.
+    expect(await raw(n.id)).toBe("# Zoom\n\n![[attachments/zoom.png|200]]\n\nText.\n");
+    await p.close();
+  });
+});
+
+describe("editor usability, release 2", () => {
+  beforeAll(freshBrowser);
+  const raw = async (id: number) => (await api(`/vaults/${vaultId}/notes/${id}`)).content as string;
+  const command = async (p: Page, title: string) => {
+    await p.keyboard.down("Meta");
+    await p.keyboard.press("k");
+    await p.keyboard.up("Meta");
+    await p.waitForSelector(".palette input");
+    await p.keyboard.type(title);
+    await Bun.sleep(150);
+    await p.keyboard.press("Enter");
+    await p.waitForSelector(".palette", { hidden: true });
+  };
+  const shown = (p: Page, text: string) => p.$eval(".cm-content", (e, t) => e.textContent!.includes(t), text);
+
+  test("headings and list items fold and unfold, without changing the note", async () => {
+    const md = "# Plan\n\n## Alpha\n\nalpha text\n\n## Beta\n\nbeta text\n\n- parent\n  - child item\n- single\n";
+    const n = await note("Usability/Fold.md", md);
+    const p = await openNote(n.id);
+    await p.waitForSelector(".cm-fold-chevron");
+    // A chevron for each heading and the item with a child; none for the item without.
+    const at = (text: string) =>
+      p.evaluate((t) => {
+        const line = [...document.querySelectorAll(".cm-line")].find((l) => l.textContent!.replace("›", "").trim().endsWith(t))!;
+        line.querySelector(".cm-fold-chevron")!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+      }, text);
+    expect(await p.$$eval(".cm-foldable", (l) => l.length)).toBe(4);
+    await at("Alpha");
+    await until(async () => !(await shown(p, "alpha text")));
+    expect(await shown(p, "beta text")).toBe(true);
+    expect(await p.$eval(".cm-fold-placeholder", (e) => e.textContent)).toMatch(/^⋯ \d+ lines?$/);
+    await p.click(".cm-fold-placeholder");
+    await until(() => shown(p, "alpha text"));
+    await at("parent");
+    await until(async () => !(await shown(p, "child item")));
+    expect(await shown(p, "single")).toBe(true);
+    await command(p, "Unfold all");
+    await until(() => shown(p, "child item"));
+    await command(p, "Fold all headings");
+    await until(async () => !(await shown(p, "alpha text")) && !(await shown(p, "beta text")));
+    await command(p, "Unfold all");
+    await until(async () => (await shown(p, "alpha text")) && (await shown(p, "beta text")));
+    expect(await raw(n.id)).toBe(md);
+    await p.close();
+  });
+
+  test("resting on a link shows the note, or its heading's section; in the editor and reading view", async () => {
+    await note("Usability/Garden.md", "---\ntags: [x]\n---\n# Garden\n\nTomatoes and beans.\n\n## Shed\n\nThe shed needs a new roof.\n");
+    const n = await note("Usability/Hover.md", "# Hover\n\nSee [[Garden]] and [[Garden#Shed]].\n");
+    const p = await openNote(n.id);
+    await p.waitForSelector(".cm-lp-wikilink");
+    const hover = async (sel: string, i: number) => {
+      const r = await p.$$eval(sel, (l, i) => {
+        const b = l[i]!.getBoundingClientRect();
+        return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
+      }, i);
+      await p.mouse.move(r.x, r.y);
+    };
+    await hover(".cm-lp-wikilink", 0);
+    await p.waitForSelector(".hover-preview .hover-preview-text");
+    expect(await p.$eval(".hover-preview-title", (e) => e.textContent)).toBe("Garden");
+    expect(await p.$eval(".hover-preview-text", (e) => e.textContent)).toContain("Tomatoes and beans.");
+    expect(await p.$eval(".hover-preview-text", (e) => e.textContent)).not.toContain("tags");
+    expect(await p.$(".hover-preview-text h1")).toBeNull(); // the title is already on the card
+    await p.mouse.move(5, 5);
+    await until(async () => (await p.$(".hover-preview")) === null);
+    await hover(".cm-lp-wikilink", 1);
+    await p.waitForFunction(() => document.querySelector(".hover-preview-title")?.textContent === "Garden › Shed");
+    const shed = await p.$eval(".hover-preview-text", (e) => e.textContent!);
+    expect(shed).toContain("new roof");
+    expect(shed).not.toContain("Tomatoes");
+    await p.mouse.move(5, 5);
+    await until(async () => (await p.$(".hover-preview")) === null);
+    // Reading view: the same card, floating.
+    await p.evaluate(() => document.querySelector<HTMLButtonElement>('.segmented button[title="Reading view"]')!.click());
+    await p.waitForSelector(".preview a.internal-link");
+    await hover(".preview a.internal-link", 0);
+    await p.waitForSelector(".hover-preview.floating .hover-preview-text");
+    expect(await p.$eval(".hover-preview.floating", (e) => e.textContent)).toContain("Tomatoes and beans.");
+    await p.keyboard.press("Escape");
+    await until(async () => (await p.$(".hover-preview.floating")) === null);
+    await p.evaluate(() => document.querySelector<HTMLButtonElement>('.segmented button[title="Live preview"]')!.click());
+    await p.close();
+  });
+});
+
+describe("editor usability, release 3", () => {
+  beforeAll(freshBrowser);
+  const raw = async (id: number) => (await api(`/vaults/${vaultId}/notes/${id}`)).content as string;
+  /** Select the last `n` characters of the note with the keyboard. */
+  const selectLast = async (p: Page, n: number) => {
+    await p.focus(".cm-content");
+    await p.keyboard.down("Meta");
+    await p.keyboard.press("ArrowDown");
+    await p.keyboard.up("Meta");
+    await p.keyboard.down("Shift");
+    for (let i = 0; i < n; i++) await p.keyboard.press("ArrowLeft");
+    await p.keyboard.up("Shift");
+  };
+  const key = async (p: Page, k: KeyInput, shift = false) => {
+    await p.keyboard.down("Meta");
+    if (shift) await p.keyboard.down("Shift");
+    await p.keyboard.press(k);
+    if (shift) await p.keyboard.up("Shift");
+    await p.keyboard.up("Meta");
+  };
+
+  test("selected text gets a format bar; its buttons and ⌘B / ⌘I toggle, and it links words to a note", async () => {
+    await note("Usability/Allotment.md", "# Allotment\n");
+    const n = await note("Usability/Format.md", "# Format\n\nPlant the beans");
+    const p = await openNote(n.id);
+    await p.waitForSelector(".cm-content");
+    await selectLast(p, 5);
+    await p.waitForSelector(".cm-format-bar");
+    expect(await p.$$eval(".cm-format-btn", (l) => l.map((b) => b.getAttribute("aria-label")))).toEqual(["Heading", "Bold", "Italic", "Strikethrough", "Highlight", "Inline code", "Link", "Colour"]);
+    await p.click('.cm-format-btn[aria-label="Bold"]');
+    await until(async () => (await raw(n.id)).endsWith("Plant the **beans**"));
+    await p.waitForSelector('.cm-format-btn[aria-label="Bold"][aria-pressed="true"]');
+    await key(p, "b");
+    await until(async () => (await raw(n.id)).endsWith("Plant the beans"));
+    await key(p, "i");
+    await until(async () => (await raw(n.id)).endsWith("Plant the *beans*"));
+    await key(p, "i");
+    await key(p, "x", true);
+    await until(async () => (await raw(n.id)).endsWith("Plant the ~~beans~~"));
+    await key(p, "x", true);
+    await until(async () => (await raw(n.id)).endsWith("Plant the beans"));
+    // Escape hides it until the selection changes.
+    await p.keyboard.press("Escape");
+    await until(async () => (await p.$(".cm-format-bar")) === null);
+    // Link: the words stay, now pointing at a note.
+    await selectLast(p, 5);
+    await p.waitForSelector(".cm-format-bar");
+    await p.click('.cm-format-btn[aria-label="Link"]');
+    await p.waitForSelector("[data-dialog-input]");
+    await p.keyboard.type("Allotment");
+    await Bun.sleep(150);
+    await p.keyboard.press("Enter");
+    await until(async () => (await raw(n.id)).endsWith("Plant the [[Allotment|beans]]"));
+    await p.close();
+  });
+
+  test("not while dragging a selection with the mouse: it appears when the button is let go", async () => {
+    const n = await note("Usability/Drag.md", "# Drag\n\nSow the onions in March\n");
+    const p = await openNote(n.id);
+    await p.waitForSelector(".cm-content");
+    const r = await p.evaluate(() => {
+      const line = [...document.querySelectorAll(".cm-line")].find((l) => l.textContent === "Sow the onions in March")!;
+      const b = line.getBoundingClientRect();
+      return { x: b.left + 2, y: b.top + b.height / 2, w: Math.min(b.width, 160) };
+    });
+    await p.mouse.move(r.x, r.y);
+    await p.mouse.down();
+    await p.mouse.move(r.x + r.w, r.y, { steps: 5 });
+    await Bun.sleep(150);
+    expect(await p.$(".cm-format-bar")).toBeNull();
+    await p.mouse.up();
+    await p.waitForSelector(".cm-format-bar");
+    await p.close();
+  });
+});
+
+describe("guided tour", () => {
+  beforeAll(freshBrowser);
+  /** Walk the tour from its first card to Done, noting each step and whether it found its target. */
+  const walk = async (p: Page) => {
+    const seen: { id: string; spot: boolean }[] = [];
+    for (let i = 0; i < 30; i++) {
+      await p.waitForFunction(() => {
+        const c = document.querySelector<HTMLElement>(".tour-card");
+        return c && c.style.visibility !== "hidden";
+      });
+      const step = await p.$eval(".tour", (t) => ({ id: (t as HTMLElement).dataset.step!, spot: !!document.querySelector(".tour-spot"), next: document.querySelector(".tour-next")!.textContent }));
+      seen.push({ id: step.id, spot: step.spot });
+      await p.click(".tour-next");
+      if (step.next === "Done") break;
+      await p.waitForFunction((id) => (document.querySelector<HTMLElement>(".tour")?.dataset.step ?? "") !== id, {}, step.id);
+    }
+    await p.waitForSelector(".tour", { hidden: true });
+    return seen;
+  };
+
+  test("offered on the home page; the laptop tour points at each part, then isn't offered again", async () => {
+    await note("Tour test/Seeds.md", "---\ntags: [garden]\n---\n# Seeds\n\nSow in spring.\n");
+    const p = await open(`/v/${vaultId}`);
+    await p.waitForSelector(".tour-offer-card");
+    await p.click(".tour-offer-card .primary");
+    const seen = await walk(p);
+    expect(seen.map((s) => s.id)).toEqual(["welcome", "make", "files", "note", "properties", "writing", "views", "width", "more", "side", "help", "commands"]);
+    // Every step with something to point at found it.
+    expect(seen.filter((s) => !s.spot).map((s) => s.id)).toEqual(["welcome", "commands"]);
+    expect(await p.evaluate(() => JSON.parse(localStorage.getItem("cp:tour")!).done)).toBe(true);
+    await p.goto(`${BASE}/v/${vaultId}`, { waitUntil: "load" });
+    await p.waitForSelector(".quick-actions");
+    expect(await p.$(".tour-offer-card")).toBeNull();
+    await p.close();
+  });
+
+  test("What's new: the steps since this device last looked; Escape ends it", async () => {
+    const p = await open(`/v/${vaultId}`);
+    await p.evaluate(() => localStorage.setItem("cp:tour", JSON.stringify({ done: true, version: "0.0.66" })));
+    await p.reload({ waitUntil: "load" });
+    await p.waitForSelector('.tour-offer-card[aria-label="What\'s new"]');
+    await p.click(".tour-offer-card .primary");
+    await p.waitForSelector(".tour-card");
+    const count = await p.$eval(".tour-count", (e) => e.textContent!);
+    expect(count).toMatch(/^1 of [2-9]$/);
+    expect(await p.$eval(".tour", (t) => (t as HTMLElement).dataset.step)).toBe("new-r2");
+    await p.keyboard.press("Escape");
+    await p.waitForSelector(".tour", { hidden: true });
+    await p.goto(`${BASE}/v/${vaultId}`, { waitUntil: "load" });
+    await p.waitForSelector(".quick-actions");
+    expect(await p.$(".tour-offer-card")).toBeNull();
+    await p.close();
+  });
+
+  test("typing \"tour\" in Search or Find a note offers the tour; so does Help", async () => {
+    const p = await open(`/v/${vaultId}`);
+    await p.waitForSelector(".quick-actions");
+    const stop = async () => {
+      await p.waitForSelector(".tour-card");
+      await p.keyboard.press("Escape");
+      await p.waitForSelector(".tour", { hidden: true });
+    };
+    // The file panel's Search tab.
+    await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".sidebar .tabs button")].find((b) => b.textContent?.includes("Search"))!.click());
+    await p.waitForSelector(".search-panel input");
+    await p.type(".search-panel input", "tour");
+    await p.waitForSelector(".search-commands button");
+    expect(await p.$$eval(".search-commands button span", (l) => l.map((e) => e.textContent))).toContain("Take the tour");
+    await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".search-commands button")].find((b) => b.textContent?.includes("Take the tour"))!.click());
+    await stop();
+    // Find a note (⌘O, and the 🔍 button on the iPhone).
+    await p.keyboard.down("Meta");
+    await p.keyboard.press("o");
+    await p.keyboard.up("Meta");
+    await p.waitForSelector(".switcher input");
+    await p.keyboard.type("tour");
+    await p.waitForSelector(".switcher-command");
+    expect(await p.$eval(".switcher li.on", (e) => e.textContent)).toContain("Take the tour");
+    await p.keyboard.press("Enter");
+    await stop();
+    // Help.
+    await p.click('.sidebar-foot button[aria-label="Help"]');
+    await p.waitForSelector(".help-tour .primary");
+    await p.click(".help-tour .primary");
+    await stop();
+    expect(await p.$(".modal")).toBeNull();
+    await p.close();
+  });
+
+  test("the iPhone tour starts with the Home Screen and uses the phone's controls", async () => {
+    const p = await open(`/v/${vaultId}`, true);
+    await p.evaluate(() => localStorage.removeItem("cp:tour"));
+    await p.reload({ waitUntil: "load" });
+    await p.waitForSelector(".tour-offer-card");
+    await p.click(".tour-offer-card .primary");
+    const seen = await walk(p);
+    expect(seen.map((s) => s.id)).toEqual(["welcome", "home-screen", "files", "find", "note", "properties", "writing", "format-bar", "views", "more", "side", "commands"]);
+    expect(seen.find((s) => s.id === "files")!.spot).toBe(true);
+    expect(seen.find((s) => s.id === "more")!.spot).toBe(true);
+    await p.close();
   });
 });
 
@@ -2392,6 +3706,327 @@ describe("keyboard only", () => {
   });
 });
 
+describe("boards (F11)", () => {
+  const boardText = (nodes: object[], edges: object[] = []) =>
+    `{\n\t"nodes":[\n${nodes.map((n) => `\t\t${JSON.stringify(n)}`).join(",\n")}\n\t],\n\t"edges":[\n${edges.map((e) => `\t\t${JSON.stringify(e)}`).join(",\n")}\n\t]\n}`;
+  const openBoard = async (id: number, phone = false) => {
+    const page = await open(`/v/${vaultId}/n/${id}`, phone);
+    await page.waitForSelector(".board-body-wrap[data-synced] .react-flow__node");
+    return page;
+  };
+  const stored = async (id: number) => (await api(`/vaults/${vaultId}/notes/${id}`)).content as string;
+
+  test("a board from another editor opens with its cards, arrows and group, and a note edited elsewhere updates its card", async () => {
+    await freshBrowser();
+    const kitchen = await note("Boards/Kitchen.md", "# Kitchen\n\nQuotes from three builders.\n");
+    const text = boardText(
+      [
+        { id: "g", type: "group", label: "Plans", x: -60, y: -80, width: 900, height: 560 },
+        { id: "t", type: "text", text: "**Budget**: £20k", x: 0, y: 0, width: 260, height: 120 },
+        { id: "k", type: "file", file: "Boards/Kitchen.md", x: 400, y: 0, width: 400, height: 300, color: "4" },
+      ],
+      [{ id: "e", fromNode: "t", fromSide: "right", toNode: "k", toSide: "left", label: "pays for" }],
+    );
+    const b = await note("Boards/House.canvas", text);
+    expect(b.path).toBe("Boards/House.canvas");
+    const p = await openBoard(b.id);
+    await p.waitForFunction(() => document.querySelector(".board-note .board-body")?.textContent?.includes("Quotes from three builders"));
+    expect(await p.$eval(".board-text .board-body", (e) => e.innerHTML)).toContain("<strong>Budget</strong>");
+    expect(await p.$eval(".board-group-label", (e) => e.textContent)).toBe("Plans");
+    expect(await p.$eval(".react-flow__edge-text", (e) => e.textContent)).toBe("pays for");
+    expect(await p.$$eval(".board-note.board-c4", (l) => l.length)).toBe(1);
+    // The editor's view switch isn't shown.
+    expect(await p.$(".note-header .segmented")).toBeNull();
+    // The note changes elsewhere: the card follows.
+    await api(`/vaults/${vaultId}/notes/${kitchen.id}/content`, { content: "# Kitchen\n\nBuilder chosen.\n" }, "PUT");
+    await p.waitForFunction(() => document.querySelector(".board-note .board-body")?.textContent?.includes("Builder chosen"), { timeout: 15_000 });
+    // Opened and left alone, the file is exactly as it was.
+    await p.close();
+    await Bun.sleep(1500);
+    expect(await stored(b.id)).toBe(text);
+  });
+
+  test("New board from ⌘K; add a text card and a note card, join them, label the arrow, Undo", async () => {
+    const idea = await note("Boards/Idea.md", "# Idea\n\nA shed.\n");
+    const p = await openNote(idea.id);
+    await p.keyboard.down("Meta");
+    await p.keyboard.press("k");
+    await p.keyboard.up("Meta");
+    await p.waitForSelector(".palette li");
+    await p.keyboard.type("new board");
+    await p.keyboard.press("Enter");
+    await answer(p, "Garden");
+    await p.waitForSelector(".board-body-wrap[data-synced] .board-empty");
+    const id = Number(p.url().split("/").pop());
+    expect((await api(`/vaults/${vaultId}/notes/${id}`)).path).toBe("Garden.canvas");
+    // In the file tree, with a board's icon.
+    await p.waitForFunction(() => [...document.querySelectorAll(".tree-row")].some((r) => r.textContent === "Garden" && r.querySelector(".tree-board")));
+
+    // A text card, written in place.
+    await p.click('.board-toolbar button[aria-label="Add a card"]');
+    await p.waitForSelector(".menu-item");
+    await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".menu-item")].find((b) => b.textContent === "Text")!.click());
+    await p.waitForSelector(".board-text-edit");
+    await p.keyboard.type("Plant **roses**");
+    await p.keyboard.press("Escape");
+    await p.waitForFunction(() => document.querySelector(".board-text .board-body")?.innerHTML.includes("<strong>roses</strong>"));
+
+    // A note card, from the picker.
+    await p.click('.board-toolbar button[aria-label="Add a card"]');
+    await p.waitForSelector(".menu-item");
+    await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".menu-item")].find((b) => b.textContent === "Note or board…")!.click());
+    await p.waitForSelector(".choose input");
+    await p.keyboard.type("Idea");
+    await p.keyboard.press("Enter");
+    await p.waitForFunction(() => document.querySelector(".board-note .board-body")?.textContent?.includes("A shed"));
+
+    // New cards land near the middle, overlapping: Tidy up moves them apart. (Clear the
+    // selection first, with a click on an empty corner, so it tidies the whole board.)
+    const pane = (await (await p.$(".react-flow__pane"))!.boundingBox())!;
+    await p.mouse.click(pane.x + 24, pane.y + pane.height - 24);
+    await p.keyboard.down("Meta");
+    await p.keyboard.press("k");
+    await p.keyboard.up("Meta");
+    await p.waitForSelector(".palette li");
+    await p.keyboard.type("tidy up the board");
+    await p.keyboard.press("Enter");
+    await until(async () => {
+      const [a, b] = await p.$$eval(".react-flow__node", (l) => l.map((e) => e.getBoundingClientRect()).map((r) => ({ l: r.left, r: r.right, t: r.top, b: r.bottom })));
+      return !!a && !!b && (a.r < b.l || b.r < a.l || a.b < b.t || b.b < a.t);
+    });
+    // Join them: drag from the text card's right edge to the note card.
+    await p.evaluate(() => document.querySelector<HTMLElement>('button[aria-label="Fit the board"]')!.click());
+    await Bun.sleep(400);
+    const from = await p.$eval(".react-flow__node-text .react-flow__handle-right", (e) => {
+      const r = e.getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    });
+    const to = await p.$eval(".react-flow__node-file .react-flow__handle-left", (e) => {
+      const r = e.getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    });
+    await p.mouse.move(from.x, from.y);
+    await p.mouse.down();
+    await p.mouse.move((from.x + to.x) / 2, (from.y + to.y) / 2, { steps: 5 });
+    await p.mouse.move(to.x, to.y, { steps: 5 });
+    await p.mouse.up();
+    await p.waitForSelector(".react-flow__edge");
+    await until(async () => (JSON.parse(await stored(id)).edges ?? []).length === 1, 8000);
+    const saved = JSON.parse(await stored(id));
+    expect(saved.nodes.map((n: any) => n.type).sort()).toEqual(["file", "text"]);
+    expect(saved.nodes.find((n: any) => n.type === "file").file).toBe("Boards/Idea.md");
+    expect(saved.edges[0]).toMatchObject({ fromSide: "right", toSide: "left" });
+
+    // Label the arrow by double-clicking it.
+    const mid = await p.$eval(".react-flow__edge-interaction", (e) => {
+      const r = e.getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    });
+    await p.mouse.click(mid.x, mid.y, { count: 2 });
+    await answer(p, "feeds");
+    await p.waitForFunction(() => document.querySelector(".react-flow__edge-text")?.textContent === "feeds");
+    // Undo takes the label back.
+    await p.focus(".board");
+    await p.keyboard.down("Meta");
+    await p.keyboard.press("z");
+    await p.keyboard.up("Meta");
+    await p.waitForFunction(() => !document.querySelector(".react-flow__edge-text"));
+    // The note knows it's on the board.
+    await until(async () => ((await api(`/vaults/${vaultId}/notes/${idea.id}/links`)).boards ?? []).some((b: any) => b.id === id));
+    await p.close();
+  });
+
+  test("a note knows its boards and the arrows to it; an arrow becomes a relation; a board on a board opens", async () => {
+    const a = await note("Boards/Roof.md", "# Roof\n");
+    const z = await note("Boards/Loft.md", "# Loft\n");
+    const inner = await note("Boards/Detail.canvas", boardText([{ id: "d", type: "text", text: "Detail", x: 0, y: 0, width: 200, height: 80 }]));
+    const b = await note(
+      "Boards/Build.canvas",
+      boardText(
+        [
+          { id: "r", type: "file", file: "Boards/Roof.md", x: 0, y: 0, width: 300, height: 200 },
+          { id: "l", type: "file", file: "Boards/Loft.md", x: 500, y: 0, width: 300, height: 200 },
+          { id: "n", type: "file", file: "Boards/Detail.canvas", x: 0, y: 400, width: 300, height: 220 },
+        ],
+        [{ id: "e", fromNode: "r", toNode: "l", label: "comes before" }],
+      ),
+    );
+    // The note's side panel: the board it's on, and the arrow to it.
+    const p = await openNote(z.id);
+    if (!(await p.$(".app.right-open"))) await p.click('button[aria-label="Side panel"]');
+    await p.waitForFunction(() => [...document.querySelectorAll(".links-panel h3")].some((h) => h.textContent?.startsWith("On boards")));
+    const panel = await p.$eval(".links-panel", (e) => e.textContent ?? "");
+    expect(panel).toContain("Build");
+    expect(panel).toContain("← Roof · comes before · on Build");
+    // Not counted again as a backlink.
+    expect(await p.$$eval(".links-panel section", (l) => l.find((s) => s.querySelector("h3")?.textContent?.startsWith("Backlinks"))?.textContent ?? "")).not.toContain("Build");
+
+    // On the board: select the arrow and make it a relation of Roof.
+    await p.goto(`${BASE}/v/${vaultId}/n/${b.id}`);
+    await p.waitForSelector(".board-body-wrap[data-synced] .react-flow__edge");
+    await p.waitForFunction(() => document.querySelector(".board-preview rect"));
+    const mid = await p.$eval(".react-flow__edge-interaction", (e) => {
+      const r = e.getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    });
+    await p.mouse.click(mid.x, mid.y);
+    await p.waitForSelector('.board-toolbar button[aria-label="Make this a relationship"]');
+    await p.click('.board-toolbar button[aria-label="Make this a relationship"]');
+    // The builder, with the arrow's notes; its label isn't a kind yet, so it's offered as a new one.
+    await p.waitForSelector('.rel-builder [data-combo="kind"]:focus');
+    expect(await p.$eval('.rel-builder [data-combo="first"]', (e) => (e as HTMLInputElement).value)).toBe("Roof");
+    expect(await p.$eval('.rel-builder [data-combo="second"]', (e) => (e as HTMLInputElement).value)).toBe("Loft");
+    expect(await p.$eval('.rel-builder [data-combo="kind"]', (e) => (e as HTMLInputElement).value)).toBe("comes before");
+    await p.waitForFunction(() => document.querySelector(".combo-list li.on")?.textContent?.includes("New kind “comes before”"));
+    await p.keyboard.press("Enter");
+    const other = await p.waitForSelector("[data-dialog-input]");
+    await other!.evaluate((e) => (e as HTMLInputElement).select());
+    await p.keyboard.type("comes after");
+    await p.keyboard.press("Enter");
+    await p.waitForFunction(() => document.querySelector(".rel-said")?.textContent === "Roof comes before Loft");
+    await p.waitForSelector(".rel-builder [data-dialog-action]:focus");
+    await p.keyboard.press("Enter");
+    await until(async () => (await stored(a.id)).includes('comes-before: "[[Loft]]"'));
+    // The new kind is in the collection's Relationships note, with both names.
+    const kinds = (await api(`/vaults/${vaultId}/notes`)).find((n: any) => n.path === "Relationships.md");
+    expect(await stored(kinds.id)).toContain("| comes before | comes after |  |");
+    await api(`/vaults/${vaultId}/notes/${kinds.id}`, undefined, "DELETE");
+
+    // The board card opens its board.
+    await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".board-board .board-card-head")].find((h) => h.textContent?.includes("Detail"))!.click());
+    await until(() => p.url().endsWith(`/n/${inner.id}`));
+    await p.waitForSelector(".board-body-wrap[data-synced] .board-text");
+    await p.close();
+  });
+
+  test("arrows by keyboard (F31): the list as sentences, Reverse with Undo, Connect to… without dragging", async () => {
+    await note("Boards/Walls.md", "# Walls\n");
+    await note("Boards/Floor.md", "# Floor\n");
+    const b = await note(
+      "Boards/Order.canvas",
+      boardText(
+        [
+          { id: "w", type: "file", file: "Boards/Walls.md", x: 0, y: 0, width: 300, height: 200 },
+          { id: "f", type: "file", file: "Boards/Floor.md", x: 500, y: 0, width: 300, height: 200 },
+          { id: "t", type: "text", text: "Paint", x: 0, y: 400, width: 200, height: 80 },
+        ],
+        [{ id: "e", fromNode: "w", fromSide: "right", toNode: "f", toSide: "left", label: "before" }],
+      ),
+    );
+    const p = await openBoard(b.id);
+    const palette = async (words: string) => {
+      await p.focus(".board");
+      await p.keyboard.down("Meta");
+      await p.keyboard.press("k");
+      await p.keyboard.up("Meta");
+      await p.waitForSelector(".palette li");
+      await p.keyboard.type(words);
+      await p.keyboard.press("Enter");
+    };
+    const edges = async () => JSON.parse(await stored(b.id)).edges as any[];
+
+    // The arrows list says each arrow as a sentence; choosing one selects it.
+    await palette("arrows on this board");
+    await p.waitForSelector(".choose li");
+    expect(await p.$$eval(".choose li", (l) => l.map((e) => e.textContent?.trim()))).toEqual(["Walls → before → Floor"]);
+    await p.keyboard.press("Enter");
+    await p.waitForSelector('.board-toolbar button[aria-label="Reverse the arrow"]');
+
+    // Reverse: ends and sides change places, in the file too; Undo puts it back.
+    await p.click('.board-toolbar button[aria-label="Reverse the arrow"]');
+    await until(async () => (await edges())[0]?.fromNode === "f", 8000);
+    expect((await edges())[0]).toMatchObject({ fromNode: "f", fromSide: "left", toNode: "w", toSide: "right", label: "before" });
+    await p.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => t.textContent?.includes("Floor → before → Walls")));
+    await p.focus(".board");
+    await p.keyboard.down("Meta");
+    await p.keyboard.press("z");
+    await p.keyboard.up("Meta");
+    await until(async () => (await edges())[0]?.fromNode === "w", 8000);
+
+    // Connect to…: select the text card, pick Floor from the list, and the arrow is drawn.
+    await p.click('.react-flow__node[data-id="t"] .board-body');
+    await palette("connect to");
+    await p.waitForSelector(".choose input");
+    await p.keyboard.type("Floor");
+    await p.keyboard.press("Enter");
+    await until(async () => (await edges()).length === 2, 8000);
+    expect((await edges()).find((e) => e.fromNode === "t")).toMatchObject({ toNode: "f" });
+    await p.waitForFunction(() => document.querySelectorAll(".react-flow__edge").length === 2);
+    await p.close();
+  });
+
+  test("two people move different cards at once; both moves stay", async () => {
+    const b = await note(
+      "Boards/Shared.canvas",
+      boardText([
+        { id: "a", type: "text", text: "A", x: 0, y: 0, width: 200, height: 80 },
+        { id: "b", type: "text", text: "B", x: 400, y: 0, width: 200, height: 80 },
+      ]),
+    );
+    const p1 = await openBoard(b.id);
+    const p2 = await openBoard(b.id);
+    const drag = async (p: Page, id: string, dy: number) => {
+      const r = await p.$eval(`.react-flow__node[data-id="${id}"]`, (e) => {
+        const b = e.getBoundingClientRect();
+        return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+      });
+      await p.mouse.move(r.x, r.y);
+      await p.mouse.down();
+      await p.mouse.move(r.x, r.y + dy / 2, { steps: 4 });
+      await p.mouse.move(r.x, r.y + dy, { steps: 4 });
+      await p.mouse.up();
+    };
+    // Headless Chrome only takes input in the tab in front, so one after the other, each page
+    // still showing the other's card where it was.
+    await p1.bringToFront();
+    await drag(p1, "a", 120);
+    await p2.bringToFront();
+    await drag(p2, "b", 160);
+    await until(async () => {
+      const c = JSON.parse(await stored(b.id));
+      return c.nodes.find((n: any) => n.id === "a").y > 50 && c.nodes.find((n: any) => n.id === "b").y > 50;
+    }, 8000);
+    // Each page shows the other's move (a page behind another draws when it comes to the front).
+    await p1.bringToFront();
+    const y = (p: Page, id: string) => p.$eval(`.react-flow__node[data-id="${id}"]`, (e) => (e as HTMLElement).style.transform);
+    await until(async () => (await y(p1, "b")) === (await y(p2, "b")) && (await y(p1, "a")) === (await y(p2, "a")));
+    await p1.close();
+    await p2.close();
+  });
+
+  test("150 cards: the board opens and pans smoothly on the phone", async () => {
+    const nodes = Array.from({ length: 150 }, (_, i) => ({ id: `n${i}`, type: "text", text: `Card ${i}\n\nSome words on it.`, x: (i % 15) * 300, y: Math.floor(i / 15) * 200, width: 260, height: 140 }));
+    const edges = nodes.slice(1).map((n, i) => ({ id: `e${i}`, fromNode: `n${i}`, toNode: n.id }));
+    const b = await note("Boards/Big.canvas", boardText(nodes, edges));
+    const started = Date.now();
+    const p = await openBoard(b.id, true);
+    const openMs = Date.now() - started;
+    // Pan with one finger: 60 moves, 16 ms apart. Slow drawing shows as the moves running late.
+    const run = await p.evaluate(async () => {
+      const pane = document.querySelector(".react-flow__pane")!;
+      const view = document.querySelector<HTMLElement>(".react-flow__viewport")!;
+      const before = view.style.transform;
+      const r = pane.getBoundingClientRect();
+      const t = (x: number, y: number) => new Touch({ identifier: 1, target: pane, clientX: x, clientY: y });
+      const cx = r.x + r.width / 2;
+      const cy = r.y + r.height / 2;
+      const start = performance.now();
+      pane.dispatchEvent(new TouchEvent("touchstart", { touches: [t(cx, cy)], changedTouches: [t(cx, cy)], bubbles: true, cancelable: true }));
+      for (let i = 1; i <= 60; i++) {
+        await new Promise((res) => setTimeout(res, 16));
+        pane.dispatchEvent(new TouchEvent("touchmove", { touches: [t(cx - i * 5, cy - i * 3)], changedTouches: [t(cx - i * 5, cy - i * 3)], bubbles: true, cancelable: true }));
+      }
+      pane.dispatchEvent(new TouchEvent("touchend", { touches: [], changedTouches: [t(cx - 300, cy - 180)], bubbles: true, cancelable: true }));
+      return { ms: performance.now() - start, moved: view.style.transform !== before };
+    });
+    console.log(`  150-card board: opened in ${openMs} ms; 60 pan moves took ${Math.round(run.ms)} ms (≥ 960 ms of waiting)`);
+    expect(openMs).toBeLessThan(10_000);
+    expect(run.moved).toBe(true);
+    expect(run.ms).toBeLessThan(2500);
+    await p.close();
+  });
+});
+
 describe("collaboration and home", () => {
   beforeAll(freshBrowser);
   test("two pages edit the same note live", async () => {
@@ -2462,3 +4097,183 @@ async function rowOfLine(p: Page, text: string) {
 }
 const lineText = (p: Page, text: string) =>
   p.evaluate((t) => [...document.querySelectorAll(".cm-line")].find((l) => l.textContent?.includes(t))?.textContent ?? null, text);
+
+describe("the cloud library on the Mac (F23)", () => {
+  // The test server plays both parts: it's the Mac, and the cloud library the Mac signs in to.
+  test("sign in from Connections through the consent page; the menu's In the cloud group; a cloud note edits live; its settings say what's done where", async () => {
+    const n = await note("Cloud check.md", "# Cloud check\n");
+    const p = await open(`/v/${vaultId}`);
+    try {
+      await p.waitForSelector(".tree-row");
+      await p.click('button[aria-label="Settings"]');
+      await p.waitForSelector(".settings-nav");
+      await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".settings-nav button")].find((b) => b.textContent?.startsWith("Connections"))!.click());
+      await p.waitForSelector('.cloud-connect input[type="url"]');
+      await p.type('.cloud-connect input[type="url"]', BASE);
+      await p.click('.cloud-connect button[type="submit"]');
+      await p.waitForFunction(() => document.querySelector(".consent h2")?.textContent?.startsWith("Sign in"));
+      await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".consent-actions button")].find((b) => b.textContent === "Sign in")!.click());
+      await p.waitForFunction(() => document.body.textContent?.includes("Signed in to the cloud library"));
+      expect(new URL(p.url()).search).toBe(""); // the result was read and taken off the address
+      await until(async () => (await p.$$eval('select[aria-label="Collection"] optgroup', (g) => g.map((x) => x.getAttribute("label")))).includes("In the cloud"));
+      const main = ((await api("/vaults")) as { id: number; name: string; cloud?: boolean }[]).find((v) => v.id === vaultId)!;
+      const cloud = ((await api("/vaults")) as { id: number; name: string; cloud?: boolean }[]).find((v) => v.cloud && v.name === main.name)!;
+      expect(cloud.id).not.toBe(vaultId);
+
+      const q = await open(`/v/${cloud.id}/n/${n.id}`);
+      await q.waitForSelector(".note-body[data-synced]");
+      expect(await content(q)).toContain("Cloud check");
+      await q.click(".cm-content");
+      await q.keyboard.press("End");
+      await q.keyboard.down("Meta");
+      await q.keyboard.press("ArrowDown");
+      await q.keyboard.up("Meta");
+      await q.keyboard.type("Typed through the Mac.");
+      await until(async () => ((await api(`/vaults/${vaultId}/notes/${n.id}`)) as { content: string }).content.includes("Typed through the Mac."), 10_000);
+      await q.click('button[aria-label="Settings"]');
+      await q.waitForFunction(() => document.querySelector(".modal")?.textContent?.includes("Members, renaming, publishing as a website, GitHub and imports are done in the cloud library itself."));
+      await q.close();
+    } finally {
+      await api("/cloud", undefined, "DELETE");
+      await p.close();
+    }
+    expect(((await api("/vaults")) as { cloud?: boolean }[]).some((v) => v.cloud)).toBe(false);
+  });
+});
+
+describe("the web clipper (F37)", () => {
+  test("in Chrome: the extension's worker sends a selection and a page to the Inbox with a capture token", async () => {
+    // A copy of clipper/ allowed to reach this test server (the real one asks for the address
+    // when its options are saved, which a test can't answer).
+    const dir = mkdtempSync(join(tmpdir(), "skein-clipper-"));
+    await Bun.$`cp -R ${join(import.meta.dir, "../../clipper")}/. ${dir}`;
+    const manifest = await Bun.file(join(dir, "manifest.json")).json();
+    manifest.host_permissions = ["http://localhost/*"];
+    await Bun.write(join(dir, "manifest.json"), JSON.stringify(manifest));
+    const made = await api("/me/tokens", { vaultId, name: "Clipper test" });
+    const b = await puppeteer.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox", `--disable-extensions-except=${dir}`, `--load-extension=${dir}`] });
+    try {
+      const worker = await b.waitForTarget((t) => t.type() === "service_worker" && t.url().endsWith("/background.js"), { timeout: 15000 });
+      const id = new URL(worker.url()).host;
+      const p = await b.newPage();
+      await p.goto(`chrome-extension://${id}/options.html`);
+      await p.evaluate((server, token) => (globalThis as any).chrome.storage.local.set({ server, token }), BASE, made.token);
+      const send = (clip: unknown) => p.evaluate((c) => (globalThis as any).chrome.runtime.sendMessage({ type: "clip", clip: c }), clip);
+      expect(await send({ kind: "selection", url: "https://example.com/bread", title: "Bread", selection: "Feed the starter" })).toEqual({ ok: true, message: "Saved it to Inbox" });
+      expect(await send({ kind: "page", url: "https://example.com/soup", title: "Leek soup" })).toMatchObject({ ok: true });
+      const inbox = ((await api(`/vaults/${vaultId}/notes`)) as { id: number; path: string }[]).find((n) => n.path === "Inbox.md")!;
+      const text = (await api(`/vaults/${vaultId}/notes/${inbox.id}`)).content as string;
+      expect(text).toContain("> Feed the starter");
+      expect(text).toContain("— [Bread](https://example.com/bread)");
+      expect(text).toContain("|Leek soup]]");
+    } finally {
+      await b.close();
+      await api(`/me/tokens/${made.row.id}`, undefined, "DELETE");
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("share one note by link (F38)", () => {
+  test("⋯ → Share by link…: confirm, the link is made, and the page shows the note with no script", async () => {
+    const n = await note("Shared soup.md", "Leeks and potatoes.");
+    const p = await open(`/v/${vaultId}/n/${n.id}`);
+    try {
+      await p.waitForSelector(".cm-content");
+      await p.click('button[aria-label="More"]');
+      await p.waitForSelector(".menu");
+      await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".menu-item")].find((b) => b.textContent?.includes("Share by link"))!.click());
+      await p.waitForFunction(() => document.querySelector(".modal")?.textContent?.includes("Anyone with the link can read this note"));
+      await p.click(".modal [data-dialog-action]");
+      await p.waitForFunction(() => document.querySelector(".toast")?.textContent?.startsWith("Shared"));
+      const s = await api(`/vaults/${vaultId}/notes/${n.id}/share`);
+      expect(s.shared).toBe(true);
+      const page = await fetch(`${BASE}${s.url}Shared%20soup`);
+      expect(await page.text()).toContain("Leeks and potatoes.");
+      // Again: now it offers the link and Stop sharing, which has Undo.
+      await p.click('button[aria-label="More"]');
+      await p.waitForSelector(".menu");
+      await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".menu-item")].find((b) => b.textContent?.includes("Share by link"))!.click());
+      await p.waitForFunction(() => document.querySelector(".modal")?.textContent?.includes("is shared by link"));
+      await p.evaluate(() => [...document.querySelectorAll<HTMLElement>(".modal [role=option], .modal button")].find((b) => b.textContent?.includes("Stop sharing"))!.click());
+      await p.waitForFunction(() => document.querySelector(".toast")?.textContent?.includes("isn't shared any more"));
+      expect((await fetch(`${BASE}${s.url}Shared%20soup`)).status).toBe(404);
+    } finally {
+      await p.close();
+    }
+  });
+});
+
+
+describe("notifications (F39)", () => {
+  test("the bell counts what's new; its list opens the note someone mentioned you in, and Mark all read clears it", async () => {
+    const me = (await api("/session")).user as { name: string };
+    const r = await fetch(`${BASE}/api/register`, { method: "POST", headers: { "content-type": "application/json", origin: BASE }, body: JSON.stringify({ email: "nina@example.com", password: "password-nina", name: "Nina" }) });
+    const nina = r.headers.get("set-cookie")!.split(";")[0]!;
+    const as = (path: string, body?: unknown) => fetch(`${BASE}/api${path}`, { method: body ? "POST" : "GET", headers: { cookie: nina, origin: BASE, "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined }).then((x) => x.json());
+    await api(`/vaults/${vaultId}/members`, { email: "nina@example.com", role: "editor" }, "PUT");
+    const invite = ((await as("/invitations")) as { id: number; vault_id: number }[]).find((i) => i.vault_id === vaultId)!;
+    await as(`/invitations/${invite.id}/accept`, {});
+    await api("/me/notifications/read", { all: true });
+    const n = await as(`/vaults/${vaultId}/notes`, { path: "Grout.md", content: `@${me.name} which colour?` });
+    await until(async () => (await api("/me/notifications")).unread > 0);
+    const p = await open(`/v/${vaultId}`);
+    try {
+      await p.waitForSelector(".bell-count");
+      await p.click("button.bell");
+      await p.waitForFunction(() => document.querySelector(".notification-list .unread")?.textContent?.includes("Nina mentioned you in “Grout”"));
+      await p.evaluate(() => document.querySelector<HTMLButtonElement>(".notification-list .unread button")!.click());
+      await p.waitForFunction((id) => location.pathname.endsWith(`/n/${id}`), {}, n.id);
+      await until(async () => (await api("/me/notifications")).unread === 0);
+      await p.waitForFunction(() => !document.querySelector(".bell-count"));
+    } finally {
+      await p.close();
+    }
+  });
+});
+
+describe("comments (L3)", () => {
+  test("select words, ⋯ → Comment…: the words are marked and the thread is in the side panel; it stays on them while someone else edits", async () => {
+    const n = await note("Comment anchor.md", "Line one.\nPick the blue tiles today.\n");
+    const p = await open(`/v/${vaultId}/n/${n.id}`);
+    try {
+      await p.waitForSelector(".cm-content");
+      await until(async () => (await content(p)).includes("blue tiles"));
+      // Select "blue tiles" in the editor, as a person dragging over it would.
+      await p.evaluate(() => {
+        const walker = document.createTreeWalker(document.querySelector(".cm-content")!, NodeFilter.SHOW_TEXT);
+        for (let t = walker.nextNode(); t; t = walker.nextNode()) {
+          const i = t.textContent!.indexOf("blue tiles");
+          if (i < 0) continue;
+          const r = document.createRange();
+          r.setStart(t, i);
+          r.setEnd(t, i + "blue tiles".length);
+          getSelection()!.removeAllRanges();
+          getSelection()!.addRange(r);
+          return;
+        }
+      });
+      await Bun.sleep(200);
+      await p.click('button[aria-label="More"]');
+      await p.waitForSelector(".menu");
+      await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".menu-item")].find((b) => b.textContent?.includes("Comment…"))!.click());
+      await p.waitForSelector(".modal input");
+      expect(await p.$eval(".modal", (e) => e.textContent ?? "")).toContain("On “blue tiles”");
+      await p.keyboard.type("Or the green ones?");
+      await p.keyboard.press("Enter");
+      await p.waitForFunction(() => document.querySelector(".cm-commented")?.textContent === "blue tiles");
+      await p.waitForFunction(() => document.querySelector(".comment-thread")?.textContent?.includes("Or the green ones?"));
+      // Someone else adds words before the commented ones, then after them.
+      await api(`/vaults/${vaultId}/notes/${n.id}/content`, { content: "Line one, and more.\nNow: pick the blue tiles today.\n" }, "PUT");
+      await until(async () => (await content(p)).includes("Now: pick"));
+      await api(`/vaults/${vaultId}/notes/${n.id}/content`, { content: "Line one, and more.\nNow: pick the blue tiles today, please.\n" }, "PUT");
+      await until(async () => (await content(p)).includes("please"));
+      await p.waitForFunction(() => document.querySelector(".cm-commented")?.textContent === "blue tiles", { timeout: 5000 });
+      // Resolve: the mark goes; the thread folds away under "1 resolved".
+      await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".comment-thread button")].find((b) => b.textContent === "Resolve")!.click());
+      await p.waitForFunction(() => !document.querySelector(".cm-commented") && document.querySelector(".comments summary")?.textContent === "1 resolved");
+    } finally {
+      await p.close();
+    }
+  });
+});

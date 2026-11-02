@@ -1,6 +1,7 @@
 // Tables you edit cell by cell (F8), in Live Preview. Click a cell to edit its markdown; Tab and
 // Shift-Tab move between cells, Enter moves down, and Tab in the last cell adds a row. The bar
-// above the table adds and removes rows and columns, aligns a column, or opens the markdown.
+// above the table has Row and Column menus (insert, move, delete, sort), alignment and the
+// markdown; a range pasted from a spreadsheet fills the cells from the one it's pasted into.
 // Every change rewrites the table with its pipes lined up (web/lib/tableModel.ts), as one
 // minimal edit to the note, so it merges with live typing and undoes in one step.
 
@@ -8,8 +9,9 @@ import { syntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 import { type EditorView, WidgetType } from "@codemirror/view";
 import { minimalChange } from "./frontmatter";
-import { addColumn, addRow, type Align, deleteColumn, deleteRow, formatTable, parseTable, setAlign, setCell, type Table } from "./tableModel";
+import { addColumn, addRow, type Align, deleteColumn, deleteRow, formatTable, moveColumn, moveRow, parseGrid, parseTable, pasteGrid, setAlign, setCell, sortBy, type Table } from "./tableModel";
 import { iconElement } from "../ui/Icon";
+import { type MenuItem, menuAt } from "../ui/Menu";
 
 /** Where focus goes after a change that redraws the table (a new row or column). */
 let refocus: { r: number; c: number } | null = null;
@@ -74,7 +76,8 @@ export class TableEditWidget extends WidgetType {
       const r = Number(active.dataset.r);
       const c = Number(active.dataset.c);
       const typed = (active.textContent ?? "").replace(/\s+/g, " ").trim();
-      if (cellText(base, r, c) !== typed) base = setCell(base, r, c, typed);
+      if (typed !== active.dataset.was && cellText(base, r, c) !== typed) base = setCell(base, r, c, typed);
+      active.dataset.was = typed;
     }
     const next = formatTable(edit(base));
     const old = view.state.doc.sliceString(at.from, at.to);
@@ -156,13 +159,45 @@ export class TableEditWidget extends WidgetType {
       b.classList.add("align");
       return b;
     };
+    // Row and Column open menus, so the bar stays short enough for a phone.
+    const menu = (icon: string, label: string, items: () => MenuItem[]) => {
+      const b = btn(icon, label, () => {
+        const at = pos();
+        menuAt(b, label, items(), (refocus) => refocus && this.focusCell(dom, at));
+      });
+      b.setAttribute("aria-haspopup", "menu");
+      b.classList.add("table-menu");
+      return b;
+    };
+    const go = (edit: (x: Table, at: { r: number; c: number }) => Table, focus: (at: { r: number; c: number }) => { r: number; c: number }) => () => {
+      const at = pos();
+      this.commit(view, dom, (x) => edit(x, at), focus(at));
+    };
     bar.append(
-      btn("plus", "Row above", () => this.commit(view, dom, (x) => addRow(x, Math.max(0, pos().r)), { r: Math.max(0, pos().r), c: pos().c })),
-      btn("plus", "Row below", () => this.commit(view, dom, (x) => addRow(x, pos().r + 1), { r: pos().r + 1, c: pos().c })),
-      btn("plus", "Column left", () => this.commit(view, dom, (x) => addColumn(x, pos().c), { r: pos().r, c: pos().c })),
-      btn("plus", "Column right", () => this.commit(view, dom, (x) => addColumn(x, pos().c + 1), { r: pos().r, c: pos().c + 1 })),
-      btn("x", "Delete row", () => pos().r >= 0 && this.commit(view, dom, (x) => deleteRow(x, pos().r), { r: Math.max(-1, Math.min(pos().r, x0().rows.length - 2)), c: pos().c })),
-      btn("x", "Delete column", () => this.commit(view, dom, (x) => deleteColumn(x, pos().c), { r: pos().r, c: Math.max(0, pos().c - 1) })),
+      menu("rows", "Row", () => {
+        const { r } = pos();
+        const rows = x0().rows.length;
+        return [
+          { label: "Insert row above", icon: "plus", hidden: r < 0, onSelect: go((x, a) => addRow(x, a.r), (a) => a) },
+          { label: "Insert row below", icon: "plus", onSelect: go((x, a) => addRow(x, a.r + 1), (a) => ({ r: a.r + 1, c: a.c })) },
+          { label: "Move row up", icon: "arrow-up", hidden: r < 1, onSelect: go((x, a) => moveRow(x, a.r, a.r - 1), (a) => ({ r: a.r - 1, c: a.c })) },
+          { label: "Move row down", icon: "arrow-down", hidden: r < 0 || r >= rows - 1, onSelect: go((x, a) => moveRow(x, a.r, a.r + 1), (a) => ({ r: a.r + 1, c: a.c })) },
+          { label: "Delete row", icon: "trash", danger: true, hidden: r < 0, onSelect: go((x, a) => deleteRow(x, a.r), (a) => ({ r: Math.max(-1, Math.min(a.r, rows - 2)), c: a.c })) },
+        ];
+      }),
+      menu("columns", "Column", () => {
+        const { c } = pos();
+        const cols = x0().header.length;
+        return [
+          { label: "Insert column left", icon: "plus", onSelect: go((x, a) => addColumn(x, a.c), (a) => a) },
+          { label: "Insert column right", icon: "plus", onSelect: go((x, a) => addColumn(x, a.c + 1), (a) => ({ r: a.r, c: a.c + 1 })) },
+          { label: "Move column left", icon: "arrow-left", hidden: c < 1, onSelect: go((x, a) => moveColumn(x, a.c, a.c - 1), (a) => ({ r: a.r, c: a.c - 1 })) },
+          { label: "Move column right", icon: "arrow-right", hidden: c >= cols - 1, onSelect: go((x, a) => moveColumn(x, a.c, a.c + 1), (a) => ({ r: a.r, c: a.c + 1 })) },
+          { label: "Sort A to Z", icon: "sort", onSelect: go((x, a) => sortBy(x, a.c, "asc"), (a) => ({ r: -1, c: a.c })) },
+          { label: "Sort Z to A", icon: "sort", onSelect: go((x, a) => sortBy(x, a.c, "desc"), (a) => ({ r: -1, c: a.c })) },
+          { label: "Delete column", icon: "trash", danger: true, hidden: cols <= 1, onSelect: go((x, a) => deleteColumn(x, a.c), (a) => ({ r: a.r, c: Math.max(0, a.c - 1) })) },
+        ];
+      }),
       align("left", "Align left", "⇤"),
       align("center", "Align centre", "↔"),
       align("right", "Align right", "⇥"),
@@ -191,6 +226,9 @@ export class TableEditWidget extends WidgetType {
         dom.dataset.c = String(c);
         const now = tableAt(view.state, view.posAtDOM(dom));
         const md = now ? cellText(now.table, r, c) : cellText(t, r, c);
+        // What it said when focused: leaving it writes back only if that was changed, so a
+        // move or sort made meanwhile is never undone by a cell's older text.
+        el.dataset.was = md;
         if (el.textContent !== md) {
           el.textContent = md;
           caretToEnd(el);
@@ -203,7 +241,7 @@ export class TableEditWidget extends WidgetType {
         setTimeout(() => {
           if (!dom.isConnected) return;
           const now = tableAt(view.state, view.posAtDOM(dom));
-          if (now && cellText(now.table, r, c) !== text) this.commit(view, dom, (x) => setCell(x, r, c, text));
+          if (now && text !== el.dataset.was && cellText(now.table, r, c) !== text) this.commit(view, dom, (x) => setCell(x, r, c, text));
           else if (document.activeElement !== el) el.innerHTML = this.renderInline(text);
         });
       };
@@ -244,6 +282,13 @@ export class TableEditWidget extends WidgetType {
           el.blur();
           view.focus();
         }
+      };
+      // A range copied from a spreadsheet fills the cells from here, across and down.
+      el.onpaste = (e) => {
+        const grid = parseGrid(e.clipboardData?.getData("text/plain") ?? "");
+        if (!grid) return;
+        e.preventDefault();
+        this.commit(view, dom, (x) => pasteGrid(x, r, c, grid), { r: r + grid.length - 1, c: c + grid[0]!.length - 1 });
       };
       // A link in a cell that isn't being edited opens with ⌘/Ctrl-click, as in the editor.
       el.onmousedown = (e) => {

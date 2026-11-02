@@ -4,7 +4,7 @@
 // Shared by the app and the standalone file. Opened by openHelp().
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { closeHelp, HELP_PAGES, helpMarkdown, helpPageFor, useHelp } from "../lib/help";
+import { closeHelp, HELP_PAGES, helpMarkdown, helpPageFor, helpTour, useHelp } from "../lib/help";
 import { drawDiagrams } from "../lib/mermaid";
 import { renderMarkdown } from "../lib/render";
 import { useNarrow } from "../lib/useNarrow";
@@ -20,6 +20,8 @@ export function HelpHost() {
 
 function Help({ initial }: { initial: string }) {
   const narrow = useNarrow();
+  // The guided tour, where the app has one (not the standalone file).
+  const tour = helpTour;
   // On a phone, opening the help at its start shows the list of topics.
   const [page, setPage] = useState<string | null>(narrow && initial === "index" ? null : initial);
   useEffect(() => void (initial !== "index" && setPage(initial)), [initial]);
@@ -53,6 +55,16 @@ function Help({ initial }: { initial: string }) {
     <Modal title={narrow && shown ? shown.title : "Help"} onClose={closeHelp} size="wide">
       <div className={`settings help${shown ? " has-section" : ""}`}>
         <nav className="settings-nav help-nav" aria-label="Help topics">
+          {tour && (
+            <div className="help-tour">
+              <button className="primary" onClick={() => (closeHelp(), requestAnimationFrame(tour.tour))}>
+                <Icon name="lightbulb" size={16} /> Take the tour
+              </button>
+              <button onClick={() => (closeHelp(), requestAnimationFrame(tour.whatsNew))}>
+                <Icon name="sparkle" size={16} /> What's new
+              </button>
+            </div>
+          )}
           {HELP_PAGES.map((p) => (
             <button key={p.id} className={shown?.id === p.id ? "on" : ""} aria-current={shown?.id === p.id ? "page" : undefined} onClick={() => setPage(p.id)}>
               <span className="settings-nav-text">{p.title}</span>

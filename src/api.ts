@@ -3,6 +3,14 @@
 // right status. `id()` parses the numeric ids in the URL. Vault routes start with
 // `vaultCtx(ctx, role)`: any write needs at least "editor", and a non-member gets 404, never 403.
 
+import { remindersFor, setReminderSettings } from "./reminders";
+import * as panel from "./outsidePanel";
+import * as shareLink from "./shareLink";
+import * as notifications from "./notifications";
+import * as comments from "./comments";
+import { isCanvasPath } from "./canvas";
+import { boardsFor } from "./boards";
+import { assignIds, exportBundle, missingIds } from "./aixf";
 import type { Server } from "bun";
 import { z } from "zod";
 import * as auth from "./auth";
@@ -16,19 +24,30 @@ import * as web from "./web";
 import * as github from "./github";
 import * as captureTokens from "./capture";
 import { mcpRoute } from "./mcp";
+import * as oauth from "./oauth";
+import * as connections from "./connections";
+import * as passkeys from "./passkeys";
+import * as twoStep from "./twoStep";
+import * as sendLongview from "./sendLongview";
+import * as floe from "./floeLandscape";
 import * as tokens from "./tokens";
 import { flushNote, kick } from "./collab";
 import { sql } from "./db";
 import { providerName, semanticEnabled } from "./embed";
 import { subscribe } from "./events";
 import * as between from "./between";
+import * as remote from "./remote";
+import * as folders from "./folderSync";
+import * as journal from "./journal";
+import { importDayOne } from "./dayone";
 import * as notes from "./notes";
 import { related, search, suggest } from "./search";
 import { secretsAvailable } from "./secrets";
 import { withProperties } from "./props";
-import { backlinksWithProperty, dayActivity, listTypes, renameType, saveViews, typeNotes, updateType } from "./typeIndex";
+import { backlinksWithProperty, dayActivity, listTypes, relationsFrom, renameType, saveViews, typeNotes, updateType } from "./typeIndex";
+import { addKinds, vaultKinds } from "./relationshipIndex";
 import { PROP_KINDS, TYPE_COLOURS } from "./types";
-import { saveWeblink } from "./weblinks";
+import { linkCard, saveWeblink } from "./weblinks";
 import { bookmarks, linkMention, removeSearch, savedSearches, saveSearch, setBookmark, setTask, unlinkedMentions, vaultTasks } from "./vaultViews";
 import { dataviewFile, dataviewPages, runDataview } from "./dataviewVault";
 import { settings } from "./settings";
@@ -44,10 +63,16 @@ type Handler = (ctx: Ctx) => Promise<Response | unknown>;
 
 const json = (data: unknown, init?: ResponseInit) => Response.json(data, init);
 
-function route(fn: Handler) {
+/** `tokenOnly`: the handler signs in by its bearer token alone, never the session cookie, so a
+ *  request from another origin (the web clipper's extension, F37) can't ride on someone's cookie
+ *  and needn't be same-origin. */
+function route(fn: Handler, opts: { tokenOnly?: boolean } = {}) {
   return async (req: Request & { params: Params }, server: Server<any>) => {
     try {
-      if (req.method !== "GET" && req.method !== "HEAD" && !auth.sameOrigin(req)) throw new HttpError(403, "Cross-origin request refused");
+      if (req.method !== "GET" && req.method !== "HEAD" && !opts.tokenOnly && !auth.sameOrigin(req)) throw new HttpError(403, "Cross-origin request refused");
+      // A cloud collection on the Mac (F23): the cloud answers, through src/remote.ts.
+      const cloudId = Number(req.params?.v);
+      if (req.params?.v && remote.isCloudVault(cloudId) && !new URL(req.url).pathname.endsWith("/send")) return await remote.forward(req, await requireUser(req), cloudId);
       const out = await fn({ req, server, url: new URL(req.url) });
       return out instanceof Response ? out : json(out ?? { ok: true });
     } catch (err) {
@@ -78,9 +103,17 @@ async function body<T extends z.ZodType>(req: Request, schema: T): Promise<z.inf
   return schema.parse(data);
 }
 
+/** The person, signed in here or through a device token from their Mac (F23). Only for routes
+ *  about collections; Settings, Admin, tokens and AI keys use requireUser. */
+async function personOrDevice(req: Request): Promise<User> {
+  const who = await tokens.requestUser(req);
+  if (!who) throw new HttpError(401, "Sign in required");
+  return who.user;
+}
+
 /** Resolve :v and check the caller's role in that vault. */
 async function vaultCtx(ctx: Ctx, min: vaults.Role) {
-  const user = await requireUser(ctx.req);
+  const user = await personOrDevice(ctx.req);
   const vaultId = id(ctx.req.params.v);
   const role = await vaults.requireRole(vaultId, user, min);
   return { user, vaultId, role };
@@ -107,19 +140,25 @@ const AssistantDraft = z.object({
 
 /** The library's name: what an admin called it (Settings → Admin), or the first admin's first
  *  name ("David's Library"), or Commonplace before anyone has signed up. */
+/** Sign out every other device of this person (a new password, two-step turned on). */
+async function signOutOthers(req: Request, userId: number, why: string): Promise<void> {
+  const others = await sql`delete from sessions where user_id = ${userId} and token_hash <> ${auth.sessionHash(req)} returning token_hash`;
+  for (const s of others) kick({ sessionHash: s.token_hash }, why);
+}
+
 export async function libraryName(): Promise<string> {
   const [set] = await sql`select value from server_info where key = 'library'`;
   if (set?.value) return set.value;
   const [first] = await sql`select name from users where is_admin order by created_at limit 1`;
   const given = String(first?.name ?? "").trim().split(/\s+/)[0];
-  return given ? `${given}'s Library` : "Commonplace";
+  return given ? `${given}'s Library` : "DO Notes";
 }
 
 export const apiRoutes = {
   // ── session ──────────────────────────────────────────────────────────────────────────
   "/api/session": {
     GET: route(async ({ req }) => {
-      const user = await auth.currentUser(req);
+      const user = (await tokens.requestUser(req))?.user ?? null;
       const [{ n }] = (await sql`select count(*)::int as n from users`) as any;
       const [inst] = await sql`select value from server_info where key = 'instance'`;
       return {
@@ -132,6 +171,8 @@ export const apiRoutes = {
         allowSignup: settings.allowSignup || n === 0,
         search: { semantic: semanticEnabled(), provider: providerName() },
         ai: { available: secretsAvailable() },
+        // F22: this server can keep collections in folders on the Mac (the laptop kit).
+        folders: user ? await folders.available() : false,
         // Admins are told when the database is getting full (N9, src/storage.ts).
         storage: user?.is_admin ? await storageState() : undefined,
       };
@@ -151,7 +192,50 @@ export const apiRoutes = {
     POST: route(async ({ req }) => {
       const b = await body(req, Credentials);
       const user = await auth.login(b.email, b.password, auth.clientAddress(req));
+      // Two-step sign-in (F40): a right password waits for the code app's code.
+      if (await twoStep.needsCode(user.id)) return { twoStep: true, flow: twoStep.awaitCode(user) };
       return json({ user }, { headers: { "Set-Cookie": await auth.startSession(req, user.id) } });
+    }),
+  },
+  "/api/login/code": {
+    POST: route(async ({ req }) => {
+      const b = await body(req, z.object({ flow: z.string().max(64), code: z.string().max(40) }));
+      const { user, recovery } = await twoStep.checkCode(b.flow, b.code);
+      const left = recovery ? (await twoStep.signInState(user.id)).recoveryLeft : undefined;
+      return json({ user, recoveryLeft: left }, { headers: { "Set-Cookie": await auth.startSession(req, user.id) } });
+    }),
+  },
+  // Passkeys (F32, src/passkeys.ts): sign in with Face ID or Touch ID. The options and the
+  // answer are two requests; the browser's WebAuthn sits between them.
+  "/api/passkeys/login/options": {
+    POST: route(async ({ req }) => passkeys.authenticationOptions(req)),
+  },
+  "/api/passkeys/login": {
+    POST: route(async ({ req }) => {
+      const b = await body(req, z.object({ flow: z.string().max(64), response: z.any() }));
+      const user = await passkeys.authenticate(b.flow, b.response);
+      return json({ user }, { headers: { "Set-Cookie": await auth.startSession(req, user.id) } });
+    }),
+  },
+  "/api/passkeys": {
+    GET: route(async ({ req }) => passkeys.listPasskeys((await requireUser(req)).id, passkeys.relyingParty(req).rpID)),
+    POST: route(async ({ req }) => {
+      const user = await requireUser(req);
+      const b = await body(req, z.object({ response: z.any(), name: z.string().max(100).default("") }));
+      return passkeys.register(user, b.response, b.name);
+    }),
+  },
+  "/api/passkeys/options": {
+    POST: route(async ({ req }) => passkeys.registrationOptions(req, await requireUser(req), await libraryName())),
+  },
+  "/api/passkeys/:id": {
+    DELETE: route(async ({ req }) => {
+      await passkeys.remove((await requireUser(req)).id, id(req.params.id));
+    }),
+  },
+  "/api/passkeys/:id/restore": {
+    POST: route(async ({ req }) => {
+      await passkeys.restore((await requireUser(req)).id, id(req.params.id));
     }),
   },
   "/api/logout": {
@@ -169,20 +253,112 @@ export const apiRoutes = {
       return { home: vaultId };
     }),
   },
+  // A note by its title, in any of the person's collections (Siri's "Open a note in DO Notes", L8
+  // step 5): the same title first, then one starting with the words, then containing them; the
+  // home collection and the most recently changed first among equals.
+  "/api/find": {
+    GET: route(async ({ req }) => {
+      const user = await requireUser(req);
+      const q = (new URL(req.url).searchParams.get("q") ?? "").trim().slice(0, 200);
+      if (!q) return [];
+      const like = q.replace(/[\\%_]/g, (c) => `\\${c}`);
+      const rows = await sql`
+        select n.id, n.vault_id, n.title from notes n join vault_members m on m.vault_id = n.vault_id and m.user_id = ${user.id}
+        where n.title ilike ${`%${like}%`} and n.path not ilike '%.canvas'
+        order by lower(n.title) = lower(${q}) desc, n.title ilike ${`${like}%`} desc,
+                 n.vault_id = (select home_vault_id from users where id = ${user.id}) desc, n.updated_at desc
+        limit 5`;
+      return rows.map((r) => ({ id: Number(r.id), vaultId: Number(r.vault_id), title: r.title as string }));
+    }),
+  },
+  // Notifications (F39): the bell's list (also what the apps alert with), and marking them read.
+  "/api/me/notifications": {
+    GET: route(async ({ req }) => notifications.list((await requireUser(req)).id, Number(new URL(req.url).searchParams.get("since") ?? 0) || 0)),
+  },
+  "/api/me/notifications/read": {
+    POST: route(async ({ req }) => {
+      const user = await requireUser(req);
+      const b = await body(req, z.object({ ids: z.array(z.number().int()).max(200).optional(), all: z.boolean().optional() }));
+      await notifications.markRead(user.id, b.all ? "all" : (b.ids ?? []));
+      return notifications.list(user.id);
+    }),
+  },
+  "/api/me/reminders": {
+    // Reminders for dated tasks (F35): the apps fetch these and schedule the alerts.
+    GET: route(async ({ req }) => {
+      const user = await requireUser(req);
+      const days = Number(new URL(req.url).searchParams.get("days") ?? 14);
+      return remindersFor(user, Number.isFinite(days) ? Math.min(Math.max(days, 1), 31) : 14);
+    }),
+    PATCH: route(async ({ req }) => {
+      const user = await requireUser(req);
+      const b = await body(req, z.object({ on: z.boolean().optional(), time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Give the time as HH:MM").optional() }));
+      return setReminderSettings(user.id, b);
+    }),
+  },
   "/api/me": {
     PATCH: route(async ({ req }) => {
       const user = await requireUser(req);
-      const b = await body(req, z.object({ name: z.string().max(200).optional(), currentPassword: z.string().optional(), newPassword: z.string().optional() }));
+      const b = await body(
+        req,
+        z.object({ name: z.string().max(200).optional(), currentPassword: z.string().optional(), newPassword: z.string().optional(), passkey: z.object({ flow: z.string().max(64), response: z.any() }).optional() }),
+      );
       if (b.name?.trim()) await sql`update users set name = ${b.name.trim()} where id = ${user.id}`;
       if (b.newPassword) {
-        await auth.login(user.email, b.currentPassword ?? "", auth.clientAddress(req));
+        // With a password, the current one proves it's them; an account on passkeys only (F40)
+        // proves it with a passkey instead.
+        if ((await twoStep.signInState(user.id)).password) await auth.login(user.email, b.currentPassword ?? "", auth.clientAddress(req));
+        else if (!b.passkey || (await passkeys.authenticate(b.passkey.flow, b.passkey.response)).id !== user.id) throw new HttpError(401, "Confirm it's you with one of your passkeys.");
         auth.validatePassword(b.newPassword);
-        await sql`update users set password_hash = ${await Bun.password.hash(b.newPassword)} where id = ${user.id}`;
+        await twoStep.setPassword(user.id, b.newPassword);
         // A new password signs out every other device, in case someone else knew the old one.
-        const others = await sql`delete from sessions where user_id = ${user.id} and token_hash <> ${auth.sessionHash(req)} returning token_hash`;
-        for (const s of others) kick({ sessionHash: s.token_hash }, "password changed");
+        await signOutOthers(req, user.id, "password changed");
       }
       return { user: await auth.currentUser(req) };
+    }),
+  },
+
+  // How a person signs in (F40, src/twoStep.ts): a password or passkeys only, and a code app as
+  // a second step. Each change asks for the password again (the sign-in limits apply).
+  "/api/me/sign-in": {
+    GET: route(async ({ req }) => twoStep.signInState((await requireUser(req)).id)),
+  },
+  "/api/me/two-step/start": {
+    POST: route(async ({ req }) => twoStep.startSetup(await requireUser(req), (await libraryName()) || "DO Notes")),
+  },
+  "/api/me/two-step": {
+    POST: route(async ({ req }) => {
+      const user = await requireUser(req);
+      const b = await body(req, z.object({ code: z.string().max(20), password: z.string().max(1024) }));
+      await auth.login(user.email, b.password, auth.clientAddress(req));
+      const codes = await twoStep.finishSetup(user.id, b.code);
+      // Anyone else signed in with only the password is signed out.
+      await signOutOthers(req, user.id, "two-step sign-in turned on");
+      return { codes };
+    }),
+    DELETE: route(async ({ req }) => {
+      const user = await requireUser(req);
+      const b = await body(req, z.object({ password: z.string().max(1024) }));
+      await auth.login(user.email, b.password, auth.clientAddress(req));
+      await twoStep.turnOff(user.id);
+      return twoStep.signInState(user.id);
+    }),
+  },
+  "/api/me/two-step/codes": {
+    POST: route(async ({ req }) => {
+      const user = await requireUser(req);
+      const b = await body(req, z.object({ password: z.string().max(1024) }));
+      await auth.login(user.email, b.password, auth.clientAddress(req));
+      return { codes: await twoStep.replaceRecoveryCodes(user.id) };
+    }),
+  },
+  "/api/me/passwordless": {
+    POST: route(async ({ req }) => {
+      const user = await requireUser(req);
+      const b = await body(req, z.object({ password: z.string().max(1024) }));
+      await auth.login(user.email, b.password, auth.clientAddress(req));
+      await twoStep.dropPassword(user.id, passkeys.relyingParty(req).rpID);
+      return twoStep.signInState(user.id);
     }),
   },
 
@@ -210,6 +386,21 @@ export const apiRoutes = {
       await tokens.revokeToken(user.id, id(req.params.id));
     }),
   },
+  // An app signing in to the MCP server (F25, src/oauth.ts): the consent page checks the request,
+  // then sends the person's answer, and goes where it's told (back to the app, with a code).
+  "/api/oauth/request": {
+    GET: route(async ({ req, url }) => {
+      await requireUser(req);
+      return oauth.checkRequest(req, Object.fromEntries(url.searchParams));
+    }),
+  },
+  "/api/oauth/approve": {
+    POST: route(async ({ req }) => {
+      const user = await requireUser(req);
+      const b = await body(req, z.object({ request: z.record(z.string(), z.string().max(4000)), allow: z.boolean(), readOnly: z.boolean().default(false) }));
+      return { redirect: await oauth.decide(req, user, b.request, b.allow, b.readOnly) };
+    }),
+  },
   // Bring your own AI (src/assistants.ts, src/ai.ts). Keys are write-only from here on.
   "/api/me/assistants": {
     GET: route(async ({ req }) => assistants.listAssistants((await requireUser(req)).id)),
@@ -224,6 +415,101 @@ export const apiRoutes = {
       return web.connect(user.id, (await body(req, z.object({ key: z.string().max(300) }))).key);
     }),
     DELETE: route(async ({ req }) => web.disconnect((await requireUser(req)).id)),
+  },
+  // Connections (F33, src/connections.ts): each person's read-only connections to services that
+  // meet the bar, for the in-app assistant. Presets (Longview, Recall) fill in what's known.
+  "/api/me/connections": {
+    GET: route(async ({ req }) => connections.list((await requireUser(req)).id)),
+    // A preset that signs in with a token, or any service with a token or none (F33 step 2).
+    POST: route(async ({ req }) => {
+      const user = await requireUser(req);
+      const b = await body(
+        req,
+        z.object({ preset: z.string().max(40).optional(), address: z.string().max(500).default(""), token: z.string().max(500).default(""), name: z.string().max(60).optional(), noSignIn: z.boolean().optional() }),
+      );
+      if (b.preset) return connections.connectToken(user.id, b.preset, b.address, b.token);
+      return connections.connectService(user.id, b);
+    }),
+  },
+  // Look at a service before connecting it: what it is, what it asks for, what tools it has.
+  "/api/me/connections/probe": {
+    POST: route(async ({ req }) => {
+      await requireUser(req);
+      const b = await body(req, z.object({ address: z.string().min(1).max(500), token: z.string().max(500).default("") }));
+      return connections.probe(b.address, b.token);
+    }),
+  },
+  // Send to Longview (F30 step 4): the second token, that can save, and only that.
+  "/api/me/longview-send": {
+    GET: route(async ({ req }) => sendLongview.sendState((await requireUser(req)).id)),
+    PUT: route(async ({ req }) => {
+      const user = await requireUser(req);
+      return sendLongview.setSendToken(user.id, (await body(req, z.object({ token: z.string().max(500) }))).token);
+    }),
+    DELETE: route(async ({ req }) => sendLongview.clearSendToken((await requireUser(req)).id)),
+  },
+  // Floe (F41): what the `/` menu's Floe diagram… and Bring in a landscape choose from.
+  "/api/me/floe": { GET: route(async ({ req }) => floe.floeState((await requireUser(req)).id)) },
+  "/api/me/floe/landscapes": { GET: route(async ({ req }) => floe.landscapes((await requireUser(req)).id)) },
+  "/api/me/floe/landscapes/:id/diagrams": { GET: route(async ({ req }) => floe.diagrams((await requireUser(req)).id, req.params.id!)) },
+  "/api/me/floe/diagrams/:id": { GET: route(async ({ req }) => floe.diagram((await requireUser(req)).id, req.params.id!)) },
+  // "From your connections" in the side panel (F33 step 4): which tool looks a note up.
+  "/api/me/connections/:id/panel": {
+    GET: route(async ({ req }) => panel.panelChoice((await requireUser(req)).id, id(req.params.id))),
+    PUT: route(async ({ req }) => {
+      const user = await requireUser(req);
+      const b = await body(req, z.object({ tool: z.string().max(64).nullable() }));
+      return panel.setPanel(user.id, id(req.params.id), b.tool);
+    }),
+  },
+  "/api/me/connections/:id/try": {
+    POST: route(async ({ req }) => connections.tryConnection((await requireUser(req)).id, id(req.params.id))),
+  },
+  // A preset that signs in with OAuth: its sign-in page's address, fetched before the button is
+  // pressed (web/components/Connections.tsx); when the service can't be reached, that's said in
+  // the answer, not as an error.
+  "/api/me/connections/oauth": {
+    POST: route(async ({ req }) => {
+      const user = await requireUser(req);
+      const { preset } = await body(req, z.object({ preset: z.string().max(40) }));
+      try {
+        return await connections.startOAuth(user.id, preset, passkeys.relyingParty(req).origin);
+      } catch (e) {
+        if (e instanceof HttpError && e.status !== 502) throw e;
+        return { url: null, problem: e instanceof Error ? e.message : "Couldn't reach it" };
+      }
+    }),
+  },
+  "/api/me/connections/:id": {
+    DELETE: route(async ({ req }) => connections.disconnect((await requireUser(req)).id, id(req.params.id))),
+  },
+  // Review: the service's tools as listed now (what changed since the person last looked), and
+  // the person's choice of which are on.
+  "/api/me/connections/:id/tools": {
+    GET: route(async ({ req }) => connections.tools((await requireUser(req)).id, id(req.params.id))),
+    PUT: route(async ({ req }) => {
+      const user = await requireUser(req);
+      const { on } = await body(req, z.object({ on: z.array(z.string().max(64)).max(200) }));
+      return connections.choose(user.id, id(req.params.id), on);
+    }),
+  },
+  // The service sends the person back here after they sign in (in a new tab, the iPhone app's
+  // Safari sheet or the Mac's browser); the state says who, so no cookie is needed.
+  "/api/connections/callback": {
+    GET: route(async ({ url }) => {
+      const state = url.searchParams.get("state") ?? "";
+      const code = url.searchParams.get("code");
+      let said: string;
+      try {
+        if (!code) throw new HttpError(400, url.searchParams.get("error") === "access_denied" ? "You chose not to connect it." : "The service didn't send DO Notes a sign-in.");
+        const name = await connections.finishOAuth(state, code);
+        said = `${name} is connected to DO Notes. You can close this and go back to DO Notes.`;
+      } catch (e) {
+        said = e instanceof HttpError ? e.message : "Something went wrong connecting it. Try again from Settings → Connections.";
+      }
+      const page = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Connections · DO Notes</title></head><body><main><h1>DO Notes</h1><p>${Bun.escapeHTML(said)}</p><p><a href="/">Back to DO Notes</a></p></main></body></html>`;
+      return new Response(page, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+    }),
   },
   "/api/me/assistants/test": {
     POST: route(async ({ req }) => {
@@ -257,7 +543,7 @@ export const apiRoutes = {
         if (e instanceof HttpError) return json({ ok: false, error: e.message, message: e.message }, { status: e.status });
         throw e;
       }
-    }),
+    }, { tokenOnly: true }),
   },
 
   // ── admin ────────────────────────────────────────────────────────────────────────────
@@ -359,7 +645,14 @@ export const apiRoutes = {
 
   // ── vaults ───────────────────────────────────────────────────────────────────────────
   "/api/vaults": {
-    GET: route(async ({ req }) => vaults.listVaults((await requireUser(req)).id)),
+    GET: route(async ({ req }) => {
+      const who = await tokens.requestUser(req);
+      if (!who) throw new HttpError(401, "Sign in required");
+      const own = await vaults.listVaults(who.user.id);
+      // On the Mac (F23), the cloud library's collections follow the Mac's own; never for another
+      // server asking with a device token, which gets only the collections kept here.
+      return who.deviceToken ? own : [...own, ...(await remote.cloudVaults(who.user.id))];
+    }),
     POST: route(async ({ req }) => {
       const user = await requireUser(req);
       const b = await body(req, z.object({ name: z.string().min(1).max(200) }));
@@ -369,7 +662,9 @@ export const apiRoutes = {
   "/api/vaults/:v": {
     PATCH: route(async (ctx) => {
       const { vaultId } = await vaultCtx(ctx, "owner");
-      await vaults.renameVault(vaultId, (await body(ctx.req, z.object({ name: z.string().max(200) }))).name);
+      const b = await body(ctx.req, z.object({ name: z.string().max(200).optional(), noteIds: z.boolean().optional() }));
+      if (b.name !== undefined) await vaults.renameVault(vaultId, b.name);
+      if (b.noteIds !== undefined) await vaults.setNoteIds(vaultId, b.noteIds);
     }),
     DELETE: route(async (ctx) => {
       const { vaultId } = await vaultCtx(ctx, "owner");
@@ -448,7 +743,7 @@ export const apiRoutes = {
           // vault or account deletion ends the stream within 20 s.
           const ping = setInterval(async () => {
             try {
-              const u = await auth.currentUser(ctx.req);
+              const u = (await tokens.requestUser(ctx.req))?.user;
               if (!u) throw new Error("signed out");
               await vaults.roleIn(vaultId, u.id);
               send(": ping\n\n");
@@ -481,7 +776,7 @@ export const apiRoutes = {
     POST: route(async (ctx) => {
       const { vaultId, user } = await vaultCtx(ctx, "editor");
       const b = await body(ctx.req, z.object({ path: z.string().min(1), content: z.string().max(5_000_000).default("") }));
-      return notes.createNote(vaultId, user.id, b.path, b.content);
+      return notes.createNote(vaultId, user.id, b.path, await notes.withNewId(vaultId, b.path, b.content));
     }),
   },
   "/api/vaults/:v/notes/:id": {
@@ -518,13 +813,16 @@ export const apiRoutes = {
     GET: route(async (ctx) => {
       const { vaultId } = await vaultCtx(ctx, "viewer");
       const noteId = id(ctx.req.params.id);
-      const [me, backlinks, outgoing, rel] = await Promise.all([
+      const [me, backlinks, outgoing, rel, onBoards, relations] = await Promise.all([
         notes.getNote(vaultId, noteId),
         backlinksWithProperty(vaultId, noteId),
         notes.outgoing(vaultId, noteId),
         related(vaultId, noteId).catch(() => []),
+        boardsFor(vaultId, noteId),
+        relationsFrom(vaultId, noteId),
       ]);
-      return { backlinks, outgoing, related: rel, created_at: me.created_at };
+      // Boards it's on are listed on their own (F11), not as backlinks.
+      return { backlinks: backlinks.filter((b) => !isCanvasPath(b.path)), outgoing, related: rel, created_at: me.created_at, relations, ...onBoards };
     }),
   },
   // Set properties without touching the rest of the note, merged into live typing (type pages).
@@ -542,6 +840,19 @@ export const apiRoutes = {
   // Types (F16): the vault's types, one type's notes and saved views, and a day's activity.
   "/api/vaults/:v/types": {
     GET: route(async (ctx) => listTypes((await vaultCtx(ctx, "viewer")).vaultId)),
+  },
+  // The kinds of relationship (F31): the collection's own (its Relationships note), its types'
+  // relations, and AI-XF's core kinds.
+  "/api/vaults/:v/relationships": {
+    GET: route(async (ctx) => vaultKinds((await vaultCtx(ctx, "viewer")).vaultId)),
+    // A new kind, from the builder: added to the Relationships note (made if need be).
+    POST: route(async (ctx) => {
+      const { vaultId, user } = await vaultCtx(ctx, "editor");
+      const b = await body(ctx.req, z.object({ label: z.string().trim().min(1).max(80), inverse: z.string().trim().max(80).optional(), hint: z.string().max(300).optional() }));
+      const added = await addKinds(vaultId, user.id, [{ label: b.label, inverse: b.inverse || b.label, hint: b.hint ?? "" }], "edit");
+      if (!added.length) throw new HttpError(409, `There's a kind called “${b.label}” already`);
+      return { added };
+    }),
   },
   "/api/vaults/:v/types/:name": {
     GET: route(async (ctx) => typeNotes((await vaultCtx(ctx, "viewer")).vaultId, decodeURIComponent(ctx.req.params.name ?? ""))),
@@ -582,6 +893,16 @@ export const apiRoutes = {
       return saveWeblink(vaultId, user.id, b.url, b.title);
     }),
   },
+  // A link card (F28): what a page on its own line says about itself. Anyone who can read the
+  // collection sees its cards; the fetch is the weblinks' one, which never reaches private addresses.
+  "/api/vaults/:v/linkcard": {
+    GET: route(async (ctx) => {
+      await vaultCtx(ctx, "viewer");
+      const url = ctx.url.searchParams.get("url") ?? "";
+      if (!url || url.length > 4000) throw new HttpError(400, "That isn't a web address");
+      return (await linkCard(url)) ?? { title: "", description: "", site: "", image: null, url };
+    }),
+  },
   // Dataview queries in a note (src/dataview.ts), run over the vault as its reader sees it.
   "/api/vaults/:v/dataview": {
     POST: route(async (ctx) => {
@@ -608,6 +929,97 @@ export const apiRoutes = {
       const path = new URL(ctx.req.url).searchParams.get("path") ?? "";
       if (!path || path.length > 1024) throw new HttpError(400, "Which file?");
       return { text: await dataviewFile(vaultId, path) };
+    }),
+  },
+  // Comments (L3): threads beside a note. Viewers read; editors comment and resolve.
+  "/api/vaults/:v/notes/:id/comments": {
+    GET: route(async (ctx) => comments.listComments((await vaultCtx(ctx, "viewer")).vaultId, id(ctx.req.params.id))),
+    POST: route(async (ctx) => {
+      const { vaultId, user } = await vaultCtx(ctx, "editor");
+      const b = await body(ctx.req, z.object({ body: z.string().max(5000), quote: z.string().max(2000).optional(), from: z.string().max(200).optional(), to: z.string().max(200).optional(), parentId: z.number().int().positive().optional() }));
+      return comments.addComment(vaultId, id(ctx.req.params.id), user, b);
+    }),
+  },
+  "/api/vaults/:v/notes/:id/comments/:cid": {
+    PATCH: route(async (ctx) => {
+      const { vaultId, user } = await vaultCtx(ctx, "editor");
+      const b = await body(ctx.req, z.object({ resolved: z.boolean().optional(), body: z.string().max(5000).optional() }));
+      return comments.changeComment(vaultId, id(ctx.req.params.id), id(ctx.req.params.cid), user, b);
+    }),
+  },
+  // Follow a note (F39): told when someone else changes it.
+  "/api/vaults/:v/notes/:id/follow": {
+    GET: route(async (ctx) => {
+      const { user } = await vaultCtx(ctx, "viewer");
+      return { following: await notifications.following(user.id, id(ctx.req.params.id)) };
+    }),
+    PUT: route(async (ctx) => {
+      const { vaultId, user } = await vaultCtx(ctx, "viewer");
+      const noteId = id(ctx.req.params.id);
+      await notes.getNote(vaultId, noteId);
+      const b = await body(ctx.req, z.object({ on: z.boolean() }));
+      return { following: await notifications.follow(user.id, noteId, b.on) };
+    }),
+  },
+  // Since you last looked (F39): what others changed in this collection.
+  "/api/vaults/:v/activity": {
+    GET: route(async (ctx) => {
+      const { vaultId, user } = await vaultCtx(ctx, "viewer");
+      return notifications.activity(user.id, vaultId);
+    }),
+    POST: route(async (ctx) => {
+      const { vaultId, user } = await vaultCtx(ctx, "viewer");
+      await notifications.markSeen(user.id, vaultId);
+      return notifications.activity(user.id, vaultId);
+    }),
+  },
+  // Share one note by link (F38): its state, make or update the page, stop sharing or Undo.
+  "/api/vaults/:v/notes/:id/share": {
+    GET: route(async (ctx) => shareLink.shareState((await vaultCtx(ctx, "viewer")).vaultId, id(ctx.req.params.id))),
+    POST: route(async (ctx) => {
+      const { vaultId, user } = await vaultCtx(ctx, "editor");
+      const b = await body(ctx.req, z.object({ tz: z.string().max(64).optional() }).default({}));
+      return shareLink.shareNote(vaultId, id(ctx.req.params.id), user, b.tz);
+    }),
+    PATCH: route(async (ctx) => {
+      const { vaultId } = await vaultCtx(ctx, "editor");
+      const b = await body(ctx.req, z.object({ live: z.boolean() }));
+      return shareLink.setShareLive(vaultId, id(ctx.req.params.id), b.live);
+    }),
+  },
+  // A Weblink note's address saved into the person's Longview (F30 step 4); never the note.
+  "/api/vaults/:v/notes/:id/longview": {
+    POST: route(async (ctx) => {
+      const { vaultId, user } = await vaultCtx(ctx, "viewer");
+      const b = await body(ctx.req, z.object({ why: z.string().max(500).default("") }));
+      return sendLongview.sendNote(user, vaultId, id(ctx.req.params.id), b.why);
+    }),
+  },
+  // A landscape from Floe (F41): previewed, then brought in or updated if Floe is as previewed.
+  "/api/vaults/:v/floe": {
+    POST: route(async (ctx) => {
+      const { vaultId, user } = await vaultCtx(ctx, "editor");
+      const b = await body(ctx.req, z.object({ landscape: z.string().min(1).max(100), folder: z.string().max(300).optional(), apply: z.boolean().default(false), hash: z.string().max(20).default("") }));
+      return b.apply ? floe.applyLandscape(user.id, vaultId, b.landscape, b.hash, b.folder) : floe.previewLandscape(user.id, vaultId, b.landscape, b.folder);
+    }),
+  },
+  "/api/vaults/:v/floe/status": {
+    GET: route(async (ctx) => {
+      const { vaultId, user } = await vaultCtx(ctx, "editor");
+      return floe.landscapeStatus(user.id, vaultId, new URL(ctx.req.url).searchParams.get("landscape") ?? "");
+    }),
+  },
+  "/api/vaults/:v/notes/:id/floe-diagrams": {
+    POST: route(async (ctx) => {
+      const { vaultId, user } = await vaultCtx(ctx, "editor");
+      return floe.refreshDiagrams(user.id, vaultId, id(ctx.req.params.id));
+    }),
+  },
+  // The open note looked up in the person's connections that are in the side panel (F33 step 4).
+  "/api/vaults/:v/notes/:id/outside": {
+    GET: route(async (ctx) => {
+      const { vaultId, user } = await vaultCtx(ctx, "viewer");
+      return panel.lookup(user, vaultId, id(ctx.req.params.id));
     }),
   },
   "/api/vaults/:v/tasks": {
@@ -772,10 +1184,11 @@ export const apiRoutes = {
     GET: route(async (ctx) => {
       const { vaultId } = await vaultCtx(ctx, "viewer");
       const n = await notes.getNote(vaultId, id(ctx.req.params.id));
+      const board = isCanvasPath(n.path);
       return new Response(n.content, {
         headers: {
-          "Content-Type": "text/markdown; charset=utf-8",
-          "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(n.title)}.md`,
+          "Content-Type": board ? "application/json; charset=utf-8" : "text/markdown; charset=utf-8",
+          "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(n.title)}${board ? ".canvas" : ".md"}`,
         },
       });
     }),
@@ -825,15 +1238,79 @@ export const apiRoutes = {
       return { moved: await notes.renameFolder(vaultId, b.from, b.to, user.id) };
     }),
   },
+  // F24: a journal entry in today's daily note of your home collection (or the one given), and
+  // the journal page's days.
+  "/api/journal": {
+    POST: route(async ({ req }) => {
+      const user = await requireUser(req);
+      const b = await body(req, z.object({ text: z.string().max(20_000), vaultId: z.number().int().positive().optional(), day: z.string().max(10).optional(), time: z.string().max(5).optional() }));
+      return journal.addEntry(user, b);
+    }),
+  },
+  "/api/vaults/:v/journal": {
+    GET: route(async (ctx) => {
+      const { vaultId } = await vaultCtx(ctx, "viewer");
+      const q = new URL(ctx.req.url).searchParams;
+      const day = q.get("day");
+      return { days: await journal.journalDays(vaultId, { before: q.get("before") ?? undefined }), onThisDay: day ? await journal.onThisDay(vaultId, day) : [] };
+    }),
+  },
+  // Import a Day One export (zip or .json) into this collection's daily notes; dryRun only counts.
+  "/api/vaults/:v/journal/import": {
+    POST: route(async (ctx) => {
+      const { vaultId, user } = await vaultCtx(ctx, "editor");
+      const form = await ctx.req.formData();
+      const file = form.get("file");
+      if (!(file instanceof File)) throw new HttpError(400, "Choose a Day One export to import");
+      return importDayOne(user, vaultId, file.name, new Uint8Array(await file.arrayBuffer()), form.get("dryRun") === "true");
+    }),
+  },
+  // Between two servers (F23): the Mac's Commonplace takes notes from one side and gives them to
+  // the other, in the person's name (src/between.ts bundle / receive).
+  "/api/vaults/:v/bundle": {
+    POST: route(async (ctx) => {
+      const b = await body(ctx.req, z.object({ notes: z.array(z.number().int().positive()).max(2000).optional(), folder: z.string().max(512).optional(), move: z.boolean().default(false) }));
+      const { user, vaultId } = await vaultCtx(ctx, b.move ? "editor" : "viewer");
+      return between.bundle(user, vaultId, b);
+    }),
+  },
+  "/api/vaults/:v/receive": {
+    POST: route(async (ctx) => {
+      const { user, vaultId } = await vaultCtx(ctx, "editor");
+      const Rev = z.object({ content: z.string().max(5_000_000), reason: z.string().max(40), created_at: z.string().max(40) });
+      const b = await body(
+        ctx.req,
+        z.object({
+          into: z.string().max(512).default(""),
+          move: z.boolean().default(false),
+          notes: z.array(z.object({ id: z.number().int(), path: z.string().max(1000), rel: z.string().max(1000), content: z.string().max(5_000_000), created_at: z.string().max(40).default(""), revisions: z.array(Rev).max(200).default([]) })).min(1).max(2000),
+          files: z.array(z.object({ path: z.string().max(1000), rel: z.string().max(1000).nullable(), data: z.string() })).max(5000).default([]),
+          types: z.array(z.object({ path: z.string().max(1000), content: z.string().max(5_000_000) })).max(200).default([]),
+        }),
+      );
+      return between.receive(user, vaultId, b);
+    }),
+  },
   "/api/vaults/:v/send": {
     // Copy or move notes (or a folder) to another of your vaults; `dryRun` says what would happen.
     POST: route(async (ctx) => {
+      const Send = z.object({ to: z.number().int().positive(), notes: z.array(z.number().int().positive()).max(2000).optional(), folder: z.string().max(512).optional(), into: z.string().max(512).default(""), move: z.boolean().default(false), dryRun: z.boolean().default(false) });
+      // Between the Mac and its cloud library (F23): two servers, so a bundle from one, received
+      // by the other; each side checks the person's role itself.
+      const from = id(ctx.req.params.v);
+      if (remote.isCloudVault(from) || remote.isCloudVault(Number((await ctx.req.clone().json().catch(() => ({}))).to))) {
+        const user = await requireUser(ctx.req);
+        const b = await body(ctx.req, Send);
+        return remote.crossSend(user, { from, to: b.to, notes: b.notes, folder: b.folder, into: b.into, move: b.move, dryRun: b.dryRun }, {
+          bundle: between.bundle,
+          receive: between.receive,
+          trash: async (v, noteId) => (kick({ noteId }, "note deleted"), await flushNote(noteId), notes.deleteNote(v, noteId, user.id)),
+          name: async (v) => (await vaults.listVaults(user.id)).find((x) => x.id === v)?.name ?? "this collection",
+        });
+      }
       // The shared check: a copy reads this vault, a move writes it (its notes go to Trash).
       const { user, vaultId } = await vaultCtx(ctx, "viewer");
-      const b = await body(
-        ctx.req,
-        z.object({ to: z.number().int().positive(), notes: z.array(z.number().int().positive()).max(2000).optional(), folder: z.string().max(512).optional(), into: z.string().max(512).default(""), move: z.boolean().default(false), dryRun: z.boolean().default(false) }),
-      );
+      const b = await body(ctx.req, Send);
       if (b.move) await vaultCtx(ctx, "editor");
       const r = { from: vaultId, to: b.to, notes: b.notes, folder: b.folder, into: b.into, move: b.move };
       if (!b.dryRun) return between.send(user, r);
@@ -863,6 +1340,82 @@ export const apiRoutes = {
   },
   "/api/vaults/:v/graph": {
     GET: route(async (ctx) => graph.graph((await vaultCtx(ctx, "viewer")).vaultId)),
+  },
+
+  // ── the cloud library, seen from the Mac (F23, src/remote.ts) ─────────────────────────────
+  "/api/cloud": {
+    GET: route(async ({ req }) => remote.linkStatus((await requireUser(req)).id)),
+    DELETE: route(async ({ req }) => {
+      await remote.disconnect(await requireUser(req));
+    }),
+  },
+  "/api/cloud/connect": {
+    POST: route(async ({ req }) => {
+      const user = await requireUser(req);
+      const b = await body(req, z.object({ url: z.string().max(500), name: z.string().max(60).default("") }));
+      return remote.connect(user, b.url, b.name, `${oauth.origin(req)}/api/cloud/callback`);
+    }),
+  },
+  "/api/cloud/callback": {
+    // Where the cloud sends the person back after they allow (or don't): a page load, so the
+    // answer is a redirect into the app, which says how it went.
+    GET: route(async ({ req, url }) => {
+      const user = await requireUser(req);
+      try {
+        await remote.callback(user, url.searchParams);
+        return Response.redirect("/?cloud=connected", 302);
+      } catch (e) {
+        return Response.redirect(`/?cloud=${encodeURIComponent(e instanceof HttpError ? e.message : "The cloud library didn't sign this Mac in")}`, 302);
+      }
+    }),
+  },
+
+  // ── folder vaults on the Mac (F22, src/folderSync.ts) ───────────────────────────────────
+  "/api/folders": {
+    GET: route(async ({ req }) => {
+      await requireUser(req);
+      return { available: await folders.available(), folders: await folders.listFolders() };
+    }),
+  },
+  "/api/vaults/:v/folder": {
+    GET: route(async (ctx) => folders.status((await vaultCtx(ctx, "viewer")).vaultId)),
+    PUT: route(async (ctx) => {
+      const { vaultId, user } = await vaultCtx(ctx, "owner");
+      const b = await body(ctx.req, z.object({ root: z.string().max(1000), mode: z.enum(["folder", "both"]), create: z.boolean().optional() }));
+      return folders.link(vaultId, user, b.root, b.mode, { create: b.create });
+    }),
+    DELETE: route(async (ctx) => {
+      const { vaultId, user } = await vaultCtx(ctx, "owner");
+      await folders.unlink(vaultId, user);
+    }),
+  },
+  "/api/vaults/:v/folder/sync": {
+    POST: route(async (ctx) => folders.syncNow((await vaultCtx(ctx, "editor")).vaultId)),
+  },
+  "/api/vaults/:v/folder/pause": {
+    POST: route(async (ctx) => {
+      const { vaultId, user } = await vaultCtx(ctx, "owner");
+      return folders.setPaused(vaultId, user, (await body(ctx.req, z.object({ paused: z.boolean() }))).paused);
+    }),
+  },
+  "/api/vaults/:v/folder/rebuild": {
+    POST: route(async (ctx) => {
+      const { vaultId, user } = await vaultCtx(ctx, "owner");
+      return folders.rebuild(vaultId, user);
+    }),
+  },
+  "/api/vaults/:v/folder/resolve": {
+    POST: route(async (ctx) => {
+      const { vaultId, user } = await vaultCtx(ctx, "editor");
+      const b = await body(ctx.req, z.object({ path: z.string().max(1000), take: z.enum(["mine", "theirs"]) }));
+      await folders.resolve(vaultId, user, b.path, b.take);
+    }),
+  },
+  "/api/vaults/:v/folder/export": {
+    POST: route(async (ctx) => {
+      const { vaultId, user } = await vaultCtx(ctx, "viewer");
+      return folders.exportTo(vaultId, user, (await body(ctx.req, z.object({ root: z.string().max(1000) }))).root);
+    }),
   },
 
   // ── GitHub vaults (F14, src/git.ts): the branch, its changes, the pull request ─────────
@@ -973,13 +1526,33 @@ export const apiRoutes = {
       return importFiles(vaultId, user.id, items, mode, String(form.get("folder") ?? ""), role === "owner");
     }),
   },
+  // AI-XF ids (F9): how many notes have none, and give them one (written into each note, once).
+  "/api/vaults/:v/aixf/ids": {
+    GET: route(async (ctx) => {
+      const { vaultId } = await vaultCtx(ctx, "viewer");
+      return { missing: (await missingIds(vaultId, ctx.url.searchParams.get("folder") || undefined)).length };
+    }),
+    POST: route(async (ctx) => {
+      const { vaultId, user } = await vaultCtx(ctx, "editor");
+      const b = await body(ctx.req, z.object({ folder: z.string().max(512).optional() }));
+      return { given: await assignIds(vaultId, user.id, b.folder || undefined) };
+    }),
+  },
   "/api/vaults/:v/export": {
     GET: route(async (ctx) => {
       const { vaultId } = await vaultCtx(ctx, "viewer");
       const [v] = await sql`select name from vaults where id = ${vaultId}`;
       const folder = ctx.url.searchParams.get("folder") || undefined;
-      const zip = await exportZip(vaultId, folder);
       const name = `${v!.name}${folder ? ` - ${folder.split("/").pop()}` : ""}`.replace(/[\\/:*?"<>|]/g, "-");
+      // An AI-XF bundle (F9): canonical concepts, typed links, a manifest and vocabularies.
+      if (ctx.url.searchParams.get("format") === "ai-xf") {
+        const { zip, report } = await exportBundle(vaultId, folder);
+        const summary = { concepts: report.concepts, links: report.links, dropped: report.dropped.length, unnamed: report.unnamed, unreadable: report.unreadable.length };
+        return new Response(zip as Uint8Array<ArrayBuffer>, {
+          headers: { "Content-Type": "application/zip", "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(name)}%20(AI-XF).zip`, "X-AI-XF-Report": JSON.stringify(summary) },
+        });
+      }
+      const zip = await exportZip(vaultId, folder);
       return new Response(zip as Uint8Array<ArrayBuffer>, {
         headers: { "Content-Type": "application/zip", "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(name)}.zip` },
       });

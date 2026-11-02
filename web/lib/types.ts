@@ -5,6 +5,7 @@
 import { useSyncExternalStore } from "react";
 import { normalisePath } from "../../src/markdown";
 import { newTypedNote, newTypeNote, STARTERS, starterNeeds, starterNote, type TypeDef, TYPES_FOLDER } from "../../src/types";
+import { type Kind, kindNamed, relationshipKinds } from "../../src/relationships";
 import { api, type Note } from "./api";
 import { fillTemplate } from "./templates";
 
@@ -14,8 +15,11 @@ interface State {
   vaultId: number | null;
   types: TypeDef[];
   undefined: { name: string; count: number }[];
+  /** The kinds of relationship (F31): the collection's own, its types', AI-XF's core. */
+  kinds: Kind[];
 }
-let state: State = { vaultId: null, types: [], undefined: [] };
+const CORE = relationshipKinds([], []);
+let state: State = { vaultId: null, types: [], undefined: [], kinds: CORE };
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((f) => f());
 
@@ -24,10 +28,13 @@ const emit = () => listeners.forEach((f) => f());
 let current: number | null = null;
 export async function loadTypes(vaultId: number): Promise<void> {
   current = vaultId;
-  if (state.vaultId !== vaultId) ((state = { vaultId, types: [], undefined: [] }), emit()); // not the last vault's meanwhile
-  const r = await api<{ types: TypeDef[]; undefined: { name: string; count: number }[] }>(`/vaults/${vaultId}/types`);
+  if (state.vaultId !== vaultId) ((state = { vaultId, types: [], undefined: [], kinds: CORE }), emit()); // not the last vault's meanwhile
+  const [r, k] = await Promise.all([
+    api<{ types: TypeDef[]; undefined: { name: string; count: number }[] }>(`/vaults/${vaultId}/types`),
+    api<{ kinds: Kind[] }>(`/vaults/${vaultId}/relationships`).catch(() => ({ kinds: CORE })),
+  ]);
   if (vaultId !== current) return;
-  state = { vaultId, types: r.types, undefined: r.undefined };
+  state = { vaultId, types: r.types, undefined: r.undefined, kinds: k.kinds };
   emit();
 }
 export const typesState = () => state;
@@ -39,6 +46,9 @@ export const useTypes = () => useSyncExternalStore(subscribeTypes, typesState);
 
 export const typeNamed = (name: string | null | undefined): TypeDef | null =>
   name ? (state.types.find((t) => t.name.toLowerCase() === name.toLowerCase()) ?? null) : null;
+
+/** The kind of relationship a property key names, in this collection's words (F31). */
+export const relationKind = (key: string): Kind | null => kindNamed(state.kinds, key);
 
 export const typeUrl = (vaultId: number, name: string) => `/v/${vaultId}/t/${encodeURIComponent(name)}`;
 

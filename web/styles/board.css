@@ -1,0 +1,148 @@
+/* Boards (F11, web/components/Board.tsx): cards and arrows on React Flow. Its base.css is
+   structural only; everything you see is set here, from tokens. */
+
+.board-body-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.board { position: relative; flex: 1; min-height: 0; background: var(--bg2); outline: none; }
+.board .react-flow {
+  --xy-background-pattern-dots-color-default: var(--line);
+  --xy-minimap-background-color-default: var(--bg);
+  --xy-minimap-mask-background-color-default: color-mix(in srgb, var(--bg3) 70%, transparent);
+  --xy-minimap-mask-stroke-color-default: var(--line);
+  --xy-minimap-node-background-color-default: var(--bg3);
+  --xy-minimap-node-stroke-color-default: var(--line);
+  --xy-connectionline-stroke-default: var(--accent);
+  --xy-edge-stroke-default: var(--muted);
+}
+.board .react-flow__pane { cursor: default; }
+.board .react-flow__node { font-size: var(--text-ui); color: var(--text); }
+
+/* a card */
+.board-card {
+  --card-c: var(--line);
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+  border: 2px solid var(--card-c);
+  border-radius: var(--radius);
+}
+.board-card.selected { box-shadow: var(--focus-ring); }
+.board-card.others { outline: 2px dashed var(--other-c); outline-offset: 3px; }
+.board-c1 { --card-c: var(--tc-red); background: color-mix(in srgb, var(--tc-red) 8%, var(--bg)); }
+.board-c2 { --card-c: var(--tc-orange); background: color-mix(in srgb, var(--tc-orange) 8%, var(--bg)); }
+.board-c3 { --card-c: var(--tc-yellow); background: color-mix(in srgb, var(--tc-yellow) 8%, var(--bg)); }
+.board-c4 { --card-c: var(--tc-green); background: color-mix(in srgb, var(--tc-green) 8%, var(--bg)); }
+.board-c5 { --card-c: var(--tc-cyan); background: color-mix(in srgb, var(--tc-cyan) 8%, var(--bg)); }
+.board-c6 { --card-c: var(--tc-purple); background: color-mix(in srgb, var(--tc-purple) 8%, var(--bg)); }
+.board-custom { background: color-mix(in srgb, var(--card-c) 8%, var(--bg)); }
+
+.board-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.board-card-head:hover { color: var(--accent); }
+.board-body { flex: 1; min-height: 0; overflow: auto; padding: 8px 12px; }
+.board-body.markdown > :first-child { margin-top: 0; }
+.board-body.markdown > :last-child { margin-bottom: 0; }
+.board-text .board-body { cursor: text; }
+.board-text-edit {
+  flex: 1;
+  width: 100%;
+  resize: none;
+  padding: 8px 12px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: var(--text-input) / 1.5 var(--sans);
+}
+.board-image { width: 100%; height: 100%; object-fit: contain; }
+.board-link .board-body { display: flex; flex-direction: column; gap: 4px; }
+.board-link .board-body p { margin: 0; overflow-wrap: anywhere; }
+.board-preview { flex: 1; min-height: 0; width: 100%; padding: 8px; }
+.board-preview rect { fill: var(--bg3); stroke: var(--line); stroke-width: 4; }
+.board-preview rect.group { fill: none; stroke-dasharray: 12 8; }
+
+/* a group: a labelled frame behind its cards */
+.board-group { background: color-mix(in srgb, var(--card-c) 6%, transparent); border-style: dashed; overflow: visible; }
+.board-group-label {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  margin-bottom: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg3);
+  color: var(--text);
+  font-size: var(--text-title);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* arrows */
+.board .react-flow__edge-path { stroke: var(--muted); stroke-width: 2; }
+.board .react-flow__edge.selected .react-flow__edge-path { stroke: var(--accent); stroke-width: 3; }
+.board-edge.board-c1 .react-flow__edge-path { stroke: var(--tc-red); }
+.board-edge.board-c2 .react-flow__edge-path { stroke: var(--tc-orange); }
+.board-edge.board-c3 .react-flow__edge-path { stroke: var(--tc-yellow); }
+.board-edge.board-c4 .react-flow__edge-path { stroke: var(--tc-green); }
+.board-edge.board-c5 .react-flow__edge-path { stroke: var(--tc-cyan); }
+.board-edge.board-c6 .react-flow__edge-path { stroke: var(--tc-purple); }
+.board-edge.board-custom .react-flow__edge-path { stroke: var(--card-c); }
+.board .react-flow__edge-textbg { fill: var(--bg2); }
+.board .react-flow__edge-text { fill: var(--text); font-size: var(--text-ui-sm); }
+.board .react-flow__arrowhead polyline { stroke: var(--muted); fill: var(--muted); }
+
+/* the handles you draw arrows from, and the resize corners */
+.board .react-flow__handle { width: 12px; height: 12px; border: 2px solid var(--bg); background: var(--accent); opacity: 0; transition: opacity var(--dur-fast) var(--ease); }
+.board .react-flow__node:hover .react-flow__handle,
+.board .react-flow__node.selected .react-flow__handle { opacity: 1; }
+.board .board-resize.handle { width: 10px; height: 10px; border: 2px solid var(--bg); border-radius: var(--radius-xs); background: var(--accent); }
+.board .react-flow__selection { background: var(--accent-soft); border: 1px solid var(--accent); }
+
+/* the toolbar and minimap */
+.board-toolbar {
+  display: flex;
+  /* On the phone, a selection's buttons wrap to a second row rather than run off the screen. */
+  flex-wrap: wrap;
+  max-width: calc(100% - 30px);
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  box-shadow: var(--shadow);
+}
+.board-minimap { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--bg); }
+
+.board-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  color: var(--muted);
+  text-align: center;
+  padding: 24px;
+}
+.board-empty p { max-width: 36ch; }
+
+/* touch: handles always showing, and big enough to hit */
+@media (hover: none) {
+  .board .react-flow__handle { width: 20px; height: 20px; }
+  .board .react-flow__node.selected .react-flow__handle { opacity: 1; }
+  .board .board-resize.handle { width: 16px; height: 16px; }
+}

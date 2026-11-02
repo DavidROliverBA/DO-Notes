@@ -70,7 +70,7 @@ export async function safeFetch(raw: string, accept: string, deps: FetchDeps = {
       {
         redirect: "manual",
         signal: AbortSignal.timeout(TIMEOUT_MS),
-        headers: { accept, "user-agent": "Mozilla/5.0 (compatible; Commonplace; +https://github.com/DavidROliverBA/commonplace-md)", "accept-language": "en-GB,en;q=0.8" },
+        headers: { accept, "user-agent": "Mozilla/5.0 (compatible; DO Notes; +https://github.com/DavidROliverBA/commonplace-md)", "accept-language": "en-GB,en;q=0.8" },
       },
       deps.fetch,
     );
@@ -257,6 +257,34 @@ export async function saveWeblink(vaultId: number, userId: number, raw: string, 
     "## Notes",
     "",
   ].join("\n");
-  const n = await notes.createNote(vaultId, userId, path, content);
+  const n = await notes.createNote(vaultId, userId, path, await notes.withNewId(vaultId, path, content));
   return { id: n.id, path: n.path, title: n.title, existed: false };
+}
+
+// ── link cards (F28) ──────────────────────────────────────────────────────────────────────
+//
+// A web address on a line of its own shows as a card: what the page says about itself, fetched
+// as safely as a weblink and kept for a day (a few hundred pages), so a note full of them
+// doesn't fetch each one every time it's opened.
+
+const CARD_TTL_MS = 24 * 3600_000;
+const CARD_MAX = 500;
+const cards = new Map<string, { at: number; meta: Promise<PageMeta | null> }>();
+
+export function linkCard(raw: string): Promise<PageMeta | null> {
+  let url: string;
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== "https:" && u.protocol !== "http:") throw new Error();
+    url = u.toString();
+  } catch {
+    throw new HttpError(400, "That isn't a web address");
+  }
+  const hit = cards.get(url);
+  if (hit && Date.now() - hit.at < CARD_TTL_MS) return hit.meta;
+  const meta = pageMeta(url).catch(() => null);
+  cards.delete(url);
+  cards.set(url, { at: Date.now(), meta });
+  while (cards.size > CARD_MAX) cards.delete(cards.keys().next().value!);
+  return meta;
 }

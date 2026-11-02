@@ -140,6 +140,10 @@ button.link,
 .icon-btn {
   justify-content: center;
 }
+/* a switch that's on (aria-pressed), such as Full-width editor */
+.icon-btn[aria-pressed="true"] {
+  color: var(--accent);
+}
 /* a dot on the Files toggle: the drawer holds something to look at (web/ui/PanelToggle.tsx) */
 .panel-toggle {
   position: relative;

@@ -100,6 +100,28 @@ export async function backlinksWithProperty(vaultId: number, noteId: number) {
   });
 }
 
+/** The notes this note's properties link to, each with the property it's in (F31): this note's
+ *  side of its relationships, as `backlinksWithProperty` is the other notes' side. */
+export async function relationsFrom(vaultId: number, noteId: number) {
+  const me = await notes.getNote(vaultId, noteId);
+  const fm = (me.frontmatter ?? {}) as Record<string, unknown>;
+  const out: { property: string; id: number; path: string; title: string; type: string | null }[] = [];
+  const seen = new Set<string>();
+  for (const [k, v] of Object.entries(fm)) {
+    if (k === "type") continue;
+    for (const t of linkTargets(v)) {
+      const hit = await notes.resolveLink(vaultId, t);
+      if (!hit || Number(hit.id) === noteId || /\.canvas$/i.test(hit.path) || seen.has(`${k}\u0000${hit.id}`)) continue;
+      seen.add(`${k}\u0000${hit.id}`);
+      out.push({ property: k, id: Number(hit.id), path: hit.path, title: "", type: null });
+    }
+  }
+  if (!out.length) return out;
+  const rows = await sql`select id, title, type_name from notes where id in ${sql([...new Set(out.map((r) => r.id))])}`;
+  const byId = new Map(rows.map((r) => [Number(r.id), r]));
+  return out.map((r) => ({ ...r, title: (byId.get(r.id)?.title as string) ?? r.path, type: (byId.get(r.id)?.type_name as string | null) ?? null }));
+}
+
 /** Notes made and changed on a day (in the server's time zone), for a daily note's side panel:
  *  the day threads itself without any links written into it. */
 export async function dayActivity(vaultId: number, day: string) {

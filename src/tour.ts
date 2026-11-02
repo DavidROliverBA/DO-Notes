@@ -16,7 +16,7 @@ status: reading
 ---
 # Start here
 
-Commonplace keeps notes as plain markdown, so everything here opens anywhere.
+DO Notes keeps notes as plain markdown, so everything here opens anywhere.
 Above this line are **properties**: click one to change it.
 
 ## Find your way
@@ -29,6 +29,8 @@ Above this line are **properties**: click one to change it.
 - [ ] Link to another note: type \`[[\` and pick [[Links and backlinks]]
 - [ ] Make a note of a kind of thing: read [[Things, not files]]
 - [ ] Look at [[Writing well]] for the quieter tools
+
+For a walk round the screen itself, use ⌘K → **Take the tour**.
 
 When you're done, delete the Tour folder: these are ordinary notes.
 `,

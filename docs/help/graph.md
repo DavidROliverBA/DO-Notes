@@ -37,7 +37,7 @@ A note's date is the first of these it has:
 1. a daily note's day;
 2. a `date:`, `created:` or `day:` property;
 3. its [type](types.md)'s date: the property the type names with `timeline: met` in its own note, or else its first date property (except a birthday);
-4. the day it was made in Commonplace. Imported notes were all made on the day of the import, so give them a `date:` to place them.
+4. the day it was made in DO Notes. Imported notes were all made on the day of the import, so give them a `date:` to place them.
 
 A date that can't be real (`2025-13-01`, `2025-02-30`) or a placeholder before the year 1000 (`0001-01-01`) is skipped, and the next rule decides.
 

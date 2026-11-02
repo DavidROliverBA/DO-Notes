@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import puppeteer, { type Browser, type Page } from "puppeteer-core";
+import puppeteer, { type Browser, type KeyInput, type Page } from "puppeteer-core";
 import { chromePath } from "./chrome";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -25,6 +25,8 @@ const FILES: Record<string, string> = {
   "Logbook/Kickoff.md": "---\ndate: 2026-03-03\n---\nStarted.\n",
   "Logbook/Review.md": "---\ndate: 2026-03-10\n---\nReviewed.\n",
   "Script.md": '# Script\n\n```dataviewjs\nconst ps = dv.pages(\'"Logbook"\').sort((p) => p.date);\ndv.table(["Note", "Day"], ps.map((p) => [p.file.link, p.date.toFormat("d LLL")]));\ndv.taskList(dv.pages(\'"Projects"\').file.tasks);\nlet net = "open";\ntry { await fetch("https://example.com/"); } catch (e) { net = "blocked"; }\nlet cookie = "readable";\ntry { document.cookie; } catch (e) { cookie = "blocked"; }\nlet top = "reachable";\ntry { parent.document.title; } catch (e) { top = "blocked"; }\ndv.paragraph(`network ${net}, cookies ${cookie}, app ${top}`);\n```\n',
+  "Chores.md": "# Chores\n\n- [ ] water the beans 📅 2026-11-01\n",
+  "Templates/Meeting.md": "# {{title}}\n\nNotes from {{date}}.\n",
   "attachments/dot.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><circle cx="5" cy="5" r="5"/></svg>',
 };
 
@@ -64,6 +66,26 @@ const readFile = (p: Page, path: string) =>
     for (const part of parts.slice(0, -1)) d = await d.getDirectoryHandle(part);
     return (await (await d.getFileHandle(parts.at(-1)!)).getFile()).text();
   }, path);
+
+/** Wait for `check` to hold, asking again every 100 ms (up to 5 s). */
+async function until(check: () => Promise<boolean>) {
+  for (let i = 0; i < 50; i++) {
+    if (await check()) return;
+    await Bun.sleep(100);
+  }
+  throw new Error("Timed out waiting");
+}
+
+const press = async (p: Page, key: KeyInput) => {
+  await p.keyboard.down("Meta");
+  await p.keyboard.press(key);
+  await p.keyboard.up("Meta");
+};
+
+const today = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
 
 const clickText = (p: Page, selector: string, text: string) =>
   p.evaluate(
@@ -155,6 +177,9 @@ describe("standalone, with a folder", () => {
     await page.waitForFunction(() => document.querySelector(".note-title")?.textContent === "Roadmap");
     expect(await readFile(page, "Projects/Roadmap.md")).toContain("# Plan");
     expect(await readFile(page, "Projects/Plan.md").catch(() => "gone")).toBe("gone");
+    // The link in Welcome follows it, as in the app.
+    await page.waitForFunction(() => document.querySelector(".toast")?.textContent?.includes("Updated the links in 1 note"));
+    await until(async () => (await readFile(page, "Welcome.md")).includes("See [[Roadmap]] and"));
   });
 
   test("a rename that only changes case keeps the file", async () => {
@@ -272,6 +297,173 @@ describe("standalone, with a folder", () => {
     await page.keyboard.press("Enter");
     await page.waitForFunction(() => document.querySelector(".note-title")?.textContent === "Welcome");
   });
+
+  test("the app's editor: the / menu and the formatting bar", async () => {
+    await clickText(page, ".tree-row.note", "Chores");
+    await page.waitForFunction(() => document.querySelector(".note-title")?.textContent === "Chores");
+    await page.click(".cm-content");
+    await press(page, "ArrowDown");
+    await page.keyboard.type("\n/head");
+    await page.waitForFunction(() => document.querySelector(".cm-tooltip-autocomplete")?.textContent?.includes("Heading 1"));
+    await Bun.sleep(150); // CodeMirror takes Enter for the menu a moment after it opens
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("Garden");
+    await until(async () => (await readFile(page, "Chores.md")).endsWith("\n# Garden"));
+    for (let i = 0; i < 6; i++) await page.keyboard.down("Shift"), await page.keyboard.press("ArrowLeft"), await page.keyboard.up("Shift");
+    await page.waitForSelector(".cm-format-bar", { visible: true });
+    // Nothing from the server: no assistants after @.
+    await page.keyboard.press("End");
+    await page.keyboard.type("\n@");
+    await Bun.sleep(300);
+    expect(await page.$(".cm-tooltip-autocomplete")).toBeNull();
+    await page.keyboard.press("Backspace");
+  });
+
+  test("⌘K offers what works here, and makes today's note", async () => {
+    await press(page, "k");
+    await page.waitForSelector(".palette input");
+    // Server features aren't offered.
+    const titles = await page.$$eval(".palette .palette-title", (t) => t.map((x) => x.textContent));
+    expect(titles).toContain("Graph view");
+    expect(titles).toContain("Bold");
+    for (const t of ["Version history", "Settings", "Ask AI in the side panel", "Journal", "New journal entry", "Move to Trash", "Take the tour"]) expect(titles).not.toContain(t);
+    await page.type(".palette input", "today's note");
+    await page.waitForFunction(() => document.querySelector(".palette li.on .palette-title")?.textContent === "Today's note");
+    await page.keyboard.press("Enter");
+    const day = today();
+    await page.waitForFunction((d) => document.querySelector(".note-title")?.textContent === d, {}, day);
+    expect(await readFile(page, `Daily/${day}.md`)).toMatch(/^# \w+day /);
+    expect(await page.$(".day-nav")).not.toBeNull();
+  });
+
+  test("a note from a template", async () => {
+    await press(page, "k");
+    await page.waitForSelector(".palette input");
+    await page.type(".palette input", "new note from template");
+    await page.waitForFunction(() => document.querySelector(".palette li.on .palette-title")?.textContent === "New note from template");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".choose-list");
+    await clickText(page, ".choose-list li", "Meeting");
+    await page.waitForSelector(".modal input[type=text], .modal input:not([type])");
+    await page.keyboard.down("Meta");
+    await page.keyboard.press("a");
+    await page.keyboard.up("Meta");
+    await page.keyboard.type("Standup");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.querySelector(".note-title")?.textContent === "Standup");
+    expect(await readFile(page, "Standup.md")).toBe(`# Standup\n\nNotes from ${today()}.\n`);
+  });
+
+  test("a bookmark and a saved search in the file panel", async () => {
+    await page.click(".note-actions button[aria-label='More']");
+    await clickText(page, ".menu .menu-item", "Bookmark");
+    await page.waitForFunction(() => [...document.querySelectorAll(".shortcuts .type-row")].some((b) => b.textContent === "Standup"));
+    await clickText(page, ".tabs button", "Search");
+    // Empty the box (it still has the last search), as React sees typing.
+    await page.$eval(".search-panel input", (i) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(i, "");
+      i.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await page.type(".search-panel input", "beans");
+    await page.click(".search-save");
+    await clickText(page, ".tabs button", "Files");
+    await page.waitForFunction(() => document.querySelector(".saved-search")?.textContent?.includes("beans"));
+    // Kept in this browser, by the folder's name and the note's path.
+    const kept = await page.evaluate(() => Object.fromEntries(Object.entries(localStorage).filter(([k]) => k.startsWith("cp-standalone-bookmarks") || k.startsWith("cp-standalone-searches"))));
+    expect(Object.values(kept)).toEqual(expect.arrayContaining(['["Standup.md"]', '["beans"]']));
+  });
+
+  test("Tasks lists the folder's tasks, and ticking one writes its file", async () => {
+    await clickText(page, ".shortcuts .type-row", "Tasks");
+    await page.waitForFunction(() => [...document.querySelectorAll(".tasks-page .task-text")].some((t) => t.textContent === "water the beans"));
+    await page.click(".tasks-page input[aria-label^='water the beans']");
+    await until(async () => (await readFile(page, "Chores.md")).includes("- [x] water the beans"));
+  });
+
+  test("the graph draws the folder's notes and links", async () => {
+    await clickText(page, ".sidebar-actions button", "Graph");
+    await page.waitForSelector(".graph-stage [aria-label^='Graph of']");
+    const label = await page.$eval(".graph-stage [aria-label^='Graph of']", (e) => e.getAttribute("aria-label")!);
+    const [, notes, links] = /(\d+) notes and (\d+) links/.exec(label)!;
+    expect(Number(notes)).toBeGreaterThan(10);
+    expect(Number(links)).toBeGreaterThanOrEqual(2); // Welcome and the plan link to each other
+  });
+});
+
+describe("standalone, with several folders", () => {
+  test("opens two folders, switches between them, remembers them, and closes one", async () => {
+    const p = await browser.newPage();
+    await p.setViewport({ width: 1280, height: 800 });
+    await p.goto(`http://localhost:${PORT}/`);
+    await p.waitForSelector(".login-card");
+    await p.evaluate(async () => {
+      const root = await navigator.storage.getDirectory();
+      for await (const name of (root as any).keys()) await root.removeEntry(name, { recursive: true });
+      const write = async (d: FileSystemDirectoryHandle, name: string, text: string) => {
+        const w = await (await d.getFileHandle(name, { create: true })).createWritable();
+        await w.write(text);
+        await w.close();
+      };
+      const garden = await root.getDirectoryHandle("Garden", { create: true });
+      const work = await root.getDirectoryHandle("Work", { create: true });
+      await write(garden, "Beans.md", "# Beans\n\nSee [[Plan]].\n");
+      await write(garden, "Plan.md", "# Garden plan\n");
+      await write(work, "Plan.md", "# Work plan\n");
+      await write(work, "Budget.md", "# Budget\n\nSee [[Plan]].\n");
+      const queue = [garden, work];
+      (window as any).showDirectoryPicker = async () => queue.shift();
+    });
+    const tree = () => p.$$eval(".tree-row.note", (r) => r.map((x) => x.textContent?.trim()).sort());
+    await clickText(p, ".login-card button", "Open a folder");
+    await p.waitForSelector(".tree-row.note");
+    expect(await tree()).toEqual(["Beans", "Plan"]);
+
+    // Open another: the welcome screen, with a way back, then the second folder.
+    await p.select("select[aria-label='Collection']", "add");
+    await p.waitForSelector(".login-card");
+    expect(await p.$$eval(".login-card button", (b) => b.map((x) => x.textContent?.trim()))).toEqual(expect.arrayContaining(["Go to Garden", "Open another folder", "Back to Garden"]));
+    await clickText(p, ".login-card button", "Open another folder");
+    await p.waitForFunction(() => (document.querySelector("select[aria-label='Collection']") as HTMLSelectElement | null)?.selectedOptions[0]?.textContent === "Work");
+    expect(await tree()).toEqual(["Budget", "Plan"]);
+    expect(await p.$$eval("select[aria-label='Collection'] option", (o) => o.map((x) => x.textContent))).toEqual(["Garden", "Work", "Open another folder…", "Close Work"]);
+
+    // A link finds the note in its own folder.
+    await clickText(p, ".tree-row.note", "Budget");
+    await p.click(".cm-lp-link[data-target='Plan']");
+    await p.waitForFunction(() => document.querySelector(".cm-content")?.textContent?.includes("Work plan"));
+
+    // Back to Garden, at the note it was on, and typing there writes Garden's file.
+    const gardenId = await p.$eval("select[aria-label='Collection'] option", (o) => (o as HTMLOptionElement).value);
+    await p.select("select[aria-label='Collection']", gardenId);
+    await p.waitForFunction(() => [...document.querySelectorAll(".tree-row.note")].some((r) => r.textContent === "Beans"));
+    await clickText(p, ".tree-row.note", "Beans");
+    await p.click(".cm-content");
+    await press(p, "ArrowDown");
+    await p.keyboard.type("Sown.");
+    const readIn = (folder: string, name: string) =>
+      p.evaluate(
+        async (folder, name) => (await (await (await (await navigator.storage.getDirectory()).getDirectoryHandle(folder)).getFileHandle(name)).getFile()).text(),
+        folder,
+        name,
+      );
+    await until(async () => (await readIn("Garden", "Beans.md")).includes("Sown."));
+    expect(await readIn("Work", "Budget.md")).not.toContain("Sown.");
+
+    // Both are remembered for next time.
+    await p.reload();
+    await p.waitForSelector(".login-card");
+    // The last opened first (the folder the tests above opened is on the list too, after them).
+    await p.waitForSelector(".standalone-folders li");
+    expect((await p.$$eval(".standalone-folders li button:first-child", (b) => b.map((x) => x.textContent?.trim()))).slice(0, 2)).toEqual(["Reopen Work", "Reopen Garden"]);
+    await clickText(p, ".standalone-folders button", "Reopen Work");
+    await p.waitForSelector(".tree-row.note");
+    expect(await tree()).toEqual(["Budget", "Plan"]);
+
+    // Closing the only open folder goes back to the welcome screen.
+    await p.select("select[aria-label='Collection']", "close");
+    await p.waitForSelector(".login-card");
+    await p.close();
+  }, 30000);
 });
 
 describe("standalone, with picked files", () => {

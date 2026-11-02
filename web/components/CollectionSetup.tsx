@@ -1,5 +1,5 @@
 // Settings → This collection → Setup (F20, slim): what a collection is, in one place. Where it's
-// kept, who's in it, whether it's your home (where Share from iPhone sends and the app opens), and
+// kept (on the Mac, possibly in a folder: F22, FolderSetup.tsx), who's in it, whether it's your home (where Share from iPhone sends and the app opens), and
 // starter types in sets for the kind of collection it is. The sets become built-in collection
 // types later, once a few collections show what repeats.
 
@@ -8,6 +8,7 @@ import { STARTER_SETS, STARTERS } from "../../src/types";
 import { api, type Vault } from "../lib/api";
 import { addStarters, loadTypes, useTypes } from "../lib/types";
 import { Icon } from "../ui/Icon";
+import { FolderKept } from "./FolderSetup";
 import { toast, toastError } from "../ui/overlays";
 
 export function CollectionSetup({ vault, members, onChanged, onInvite }: { vault: Vault; members: number; onChanged: () => void; onInvite: () => void }) {
@@ -47,9 +48,11 @@ export function CollectionSetup({ vault, members, onChanged, onInvite }: { vault
       <h3>Setup</h3>
       <dl className="setup-facts">
         <dt>
-          <Icon name={vault.git_repo ? "branch" : "vault"} size={16} /> Kept
+          <Icon name={vault.git_repo ? "branch" : vault.folder ? "folder" : "vault"} size={16} /> Kept
         </dt>
-        <dd>{vault.git_repo ? <>In this library, copied from GitHub: <code>{vault.git_repo}</code></> : "In this library"}</dd>
+        <dd>
+          <FolderKept vault={vault} onChanged={onChanged} />
+        </dd>
         <dt>
           <Icon name="users" size={16} /> People
         </dt>
@@ -66,7 +69,7 @@ export function CollectionSetup({ vault, members, onChanged, onInvite }: { vault
         </dt>
         <dd>
           {vault.home ? (
-            "Your home collection: Share from iPhone sends here, and Commonplace opens here."
+            "Your home collection: Share from iPhone sends here, and DO Notes opens here."
           ) : (
             <button onClick={() => void makeHome()} disabled={!!busy}>
               Make this my home collection

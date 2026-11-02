@@ -82,6 +82,8 @@ async function networkFirst(req, cacheName, key) {
     const res = await fetch(req);
     // Keep good answers only; an error page or a 401 must never become the offline copy.
     if (res.ok && res.type === "basic") await cache.put(key, res.clone());
+    // On the Mac, a cloud collection whose cloud can't be reached (F23): offline, like no signal.
+    if (res.status === 503 && res.headers.get("X-Cloud-Unreachable")) return (await cache.match(key)) ?? res;
     return res;
   } catch {
     const hit = await cache.match(key);

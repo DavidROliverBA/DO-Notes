@@ -26,10 +26,14 @@ On Windows and Linux, use Ctrl where it says ⌘.
 | `[[` | Link to a note, with suggestions |
 | `#` | Add a tag, with suggestions |
 | `@` and an assistant's name | Ask that AI assistant, under this line |
+| `⌘B` / `⌘I` | Bold and italic (again to take it off) |
+| `⌘⇧X` | Strikethrough |
+| `⌘E` | Inline `code` |
 | `⌘⇧H` | Colour or highlight the selected text |
 | `⌘`-click a link | Follow it |
 | `⌘Z` / `⌘⇧Z` | Undo and redo your own changes |
-| `⌘F` | Find in this note |
+| `⌘F` | Find in this note, and replace |
+| `⌘⌥[` / `⌘⌥]` | Fold and unfold the heading or list item you're in (Ctrl+Shift+[ and ] on Windows) |
 | `Tab` / `⇧Tab` | Indent and outdent a list item; next and previous cell in a table |
 | `Enter` in a table | The cell below |
 | Paste or drop a picture | Upload it and show it in the note |

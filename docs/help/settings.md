@@ -9,11 +9,11 @@ Every setting is in one place. Open Settings from your name at the bottom of the
 
 | Section | What's there |
 | --- | --- |
-| **Account** | Your name, the theme (Auto, Light or Dark), your password, and Sign out. |
+| **Account** | Your name, the theme (Auto, Light or Dark), spelling and grammar help, your password (or **passkeys only**), **two-step sign-in** (a code from a code app after your password, with recovery codes), **passkeys** (sign in with Face ID or Touch ID; all three in [Signing in](getting-started.md)), and Sign out. |
 | **This collection** | The collection's name, its **members** and invitations, **import** and **export**, and leaving or deleting the collection. See [Sharing](sharing.md) and [Import and export](import-export.md). |
 | **Website** | Publishing the collection as a website: what's included, features, the preview, and taking it down. Owners only. See [Publish a website](website.md). |
 | **AI assistants** | Your assistants, their keys, models and daily limits. See [AI assistants](ai.md). |
-| **Connections** | **Connect Claude** (an MCP token), **GitHub** (your token for GitHub collections) and **Share from iPhone** (a token for the Apple Shortcut). Each token can be revoked. |
+| **Connections** | **Cloud library** (on your Mac: sign in to the DO Notes you use on the web, see [Your library and collections](collections.md)), **Connect Claude** (claude.ai's address to add, MCP tokens, and the apps you've let in), **Longview** and **Recall** (for your assistants to read, and Send to Longview for Weblink notes; see [AI assistants](ai.md)), **Macs signed in** (in the cloud: each Mac showing your collections, with Sign out), **GitHub** (your token for GitHub collections) and **Share from iPhone** (a token for the Apple Shortcut). Each token can be revoked. |
 | **Admin** | For admins: the library's name, making accounts, and how full the database is. |
 
 ## Storage

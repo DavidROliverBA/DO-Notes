@@ -21,6 +21,16 @@ const setConv = (c: Conversation | null) => {
   seq++;
   listeners.forEach((f) => f());
 };
+/** A request to send in a new conversation as soon as the panel has one (Reflect on this week). */
+let queued: string | null = null;
+export function askInPanel(text: string) {
+  queued = text;
+  if (conv && !conv.empty) {
+    conv.stop();
+    setConv(new Conversation(conv.assistant, where));
+  } else listeners.forEach((f) => f());
+}
+
 /** Where the person is, read at each send: the panel follows them between notes and vaults. */
 const here = { vaultId: 0, noteId: null as number | null };
 const where = () => ({ ...here });
@@ -72,6 +82,16 @@ export function AiPanel(p: Props) {
     const a = preferredAssistant(list);
     if (a) setConv(new Conversation(a, where));
   }, [list, current]);
+  const ticks = useSyncExternalStore(
+    (f) => (listeners.add(f), () => void listeners.delete(f)),
+    () => seq + (queued ? 0.5 : 0),
+  );
+  useEffect(() => {
+    if (!current || !queued || !current.empty) return;
+    const text = queued;
+    queued = null;
+    void current.send(text);
+  }, [current, ticks]);
 
   if (!list) return <div className="ai-panel" />;
   if (!list.length)

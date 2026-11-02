@@ -4,13 +4,20 @@
 // device in IndexedDB (F4), so it opens and takes edits offline; only metadata comes over REST.
 // What the note can do is published to web/lib/commands.ts with provide("note", …).
 
+import { shareByLink } from "../lib/shareLink";
+import { sendOn, sendToLongview } from "../lib/longview";
+import { checkLandscape, floeConnected, floeWeb, openInFloe, refreshFloeDiagrams, updateLandscape } from "../lib/floe";
+import { coverSrc, emojiIcon } from "../lib/look";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { IndexeddbPersistence } from "y-indexeddb";
+import { isCanvasPath } from "../../src/canvas";
+import { parseFrontmatter } from "../../src/markdown";
+import { Board } from "./Board";
 import { WebsocketProvider } from "y-websocket";
 import { offlineName, rememberOpened } from "../lib/offline";
 import * as Y from "yjs";
-import { headings, normalisePath } from "../../src/markdown";
+import { headings, normalisePath, readingMinutes } from "../../src/markdown";
 import { api, type Note, type NoteSummary, type User } from "../lib/api";
 import { userColor } from "../lib/links";
 import { renderMarkdown, toggleTask } from "../lib/render";
@@ -27,6 +34,7 @@ import { isTypePath } from "../../src/types";
 import { History } from "./History";
 import { Icon } from "../ui/Icon";
 import { PanelToggle } from "../ui/PanelToggle";
+import { setFullWidth, useFullWidth } from "../lib/editorWidth";
 import { setFocusMode, useFocusMode } from "../lib/focusMode";
 import { noteTyping, resetChrome, setChromeHidden } from "../lib/phoneChrome";
 import { useNarrow } from "../lib/useNarrow";
@@ -37,7 +45,10 @@ import { addDays, dailyDate, fillTemplate, formatDate } from "../lib/templates";
 import { COMMANDS, currentCtx, type NoteActions, noteMenu, provide } from "../lib/commands";
 import { Menu } from "../ui/Menu";
 import { createTypedNote, setProperties, typeNamed, typesState, typeUrl, useTypes } from "../lib/types";
-import { chooseDialog, toast, toastError } from "../ui/overlays";
+import { chooseDialog, promptDialog, toast, toastError } from "../ui/overlays";
+import { addComment, anchorsFor, rangeOf, useComments } from "../lib/comments";
+import { openLightbox } from "../ui/lightbox";
+import { attachHoverPreviews } from "../lib/hoverPreview";
 
 /** edit = Live Preview (renders in place); source = plain markdown; read = rendered
  *  only; split = source beside the rendered view (not on a phone). */
@@ -49,6 +60,8 @@ interface Props {
   user: User;
   /** The server database's identity, for naming this note's offline copy (F4). */
   instance: string;
+  /** In the cloud library, reached through this Mac (F23): its ids are the cloud's. */
+  cloud?: boolean;
   notes: NoteSummary[];
   tags: string[];
   /** Every folder, for Move to…. */
@@ -75,10 +88,28 @@ interface Peer {
 export function NoteView(props: Props) {
   const { vaultId, noteId, user } = props;
   const [note, setNote] = useState<Note | null>(null);
+  // Send to Longview (F30 step 4) is offered on Weblink notes once it's on in Settings.
+  const [longviewOn, setLongviewOn] = useState(sendOn);
+  useEffect(() => {
+    const on = () => setLongviewOn(sendOn());
+    addEventListener("cp:longview-send", on);
+    return () => removeEventListener("cp:longview-send", on);
+  }, []);
+  // A landscape brought in from Floe (F41): its notes can be updated, and opening its overview
+  // asks Floe (once a session) whether it has changed.
+  const [floeOn, setFloeOn] = useState(floeConnected);
+  useEffect(() => {
+    const on = () => setFloeOn(floeConnected());
+    addEventListener("cp:floe", on);
+    return () => removeEventListener("cp:floe", on);
+  }, []);
+  const floeLandscape = typeof note?.frontmatter?.["floe-landscape"] === "string" ? (note.frontmatter["floe-landscape"] as string) : null;
+  const floeOverview = !!floeLandscape && note?.frontmatter?.["floe-id"] === undefined;
   const [error, setError] = useState<string | null>(null);
   const [synced, setSynced] = useState(false);
   const [status, setStatus] = useState<"connecting" | "connected" | "disconnected">("connecting");
   const [text, setText] = useState("");
+  const [stats, setStats] = useState({ words: 0, selected: 0 });
   const [peers, setPeers] = useState<Peer[]>([]);
   const [mode, setMode] = useState<Mode>(() => (localStorage.getItem("cp:mode") as Mode) || "edit");
   const [renaming, setRenaming] = useState(false);
@@ -90,6 +121,16 @@ export function NoteView(props: Props) {
     titleButton.current?.focus();
   }, [renaming]);
   const [history, setHistory] = useState(false);
+  // F39: whether you follow this note (told when someone else changes it).
+  const [following, setFollowingState] = useState(false);
+  useEffect(() => {
+    let live = true;
+    setFollowingState(false);
+    api<{ following: boolean }>(`/vaults/${vaultId}/notes/${noteId}/follow`).then((r) => live && setFollowingState(r.following), () => {});
+    return () => {
+      live = false;
+    };
+  }, [vaultId, noteId]);
   const editor = useRef<EditorHandle>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const picker = useRef<HTMLInputElement>(null);
@@ -103,9 +144,15 @@ export function NoteView(props: Props) {
   });
 
   const readOnly = note?.role === "viewer";
+  useEffect(() => {
+    if (floeOverview && floeOn && !readOnly && floeLandscape) void checkLandscape(vaultId, floeLandscape);
+  }, [floeOverview, floeOn, readOnly, floeLandscape, vaultId]);
+  // A board (F11): the same live document, holding cards instead of text.
+  const board = isCanvasPath(props.notes.find((n) => n.id === noteId)?.path ?? note?.path ?? "");
   useBookmarks(); // the ⋯ menu says Bookmark or Remove bookmark
   const narrow = useNarrow();
   const focusMode = useFocusMode();
+  const fullWidth = useFullWidth();
   const effectiveMode: Mode = narrow && mode === "split" ? "edit" : readOnly && mode !== "read" ? "read" : mode;
 
   // On a phone: scrolling down tucks the header away, scrolling up or reaching the top brings it
@@ -176,6 +223,9 @@ export function NoteView(props: Props) {
 
   // Keep path/title in step with renames made elsewhere.
   const summary = props.notes.find((n) => n.id === noteId);
+  // Its look (F28): an emoji icon by the title, a cover picture, a wider page.
+  const icon = emojiIcon(summary?.icon);
+  const cover = coverSrc(vaultId, summary?.cover);
   useEffect(() => {
     if (summary && note && summary.path !== note.path) setNote({ ...note, path: summary.path, title: summary.title });
   }, [summary?.path]);
@@ -184,15 +234,57 @@ export function NoteView(props: Props) {
     const ydoc = new Y.Doc();
     // Offline (F4): the note's CRDT state is kept on this device too, so it opens and takes edits
     // with no signal, and merges them when the socket reconnects. Same document, so no duplicates.
-    const name = offlineName(props.instance, user.id, noteId);
+    const name = offlineName(props.instance, user.id, noteId, props.cloud ? vaultId : undefined);
     const local = new IndexeddbPersistence(name, ydoc);
     rememberOpened(name);
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const provider = new WebsocketProvider(`${proto}//${location.host}/ws`, String(noteId), ydoc, { connect: true, maxBackoffTime: 5000 });
+    // `v` lets the Mac relay a cloud collection's note to the cloud (F23); other servers ignore it.
+    const provider = new WebsocketProvider(`${proto}//${location.host}/ws`, String(noteId), ydoc, { connect: true, maxBackoffTime: 5000, params: { v: String(vaultId) } });
     const { color, light } = userColor(user.id);
     provider.awareness.setLocalStateField("user", { name: user.name, color, colorLight: light, id: user.id });
     return { ydoc, ytext: ydoc.getText("content"), provider, local };
   }, [noteId, user.id]);
+
+  // Comments (L3): open threads marked where their words are now; Comment… starts one on the
+  // selected words (or the line), anchored to them by Yjs positions.
+  const comments = useComments(vaultId, noteId);
+  const [commentRanges, setCommentRanges] = useState<{ id: number; from: number; to: number }[]>([]);
+  useEffect(() => {
+    const place = () =>
+      setCommentRanges(
+        comments
+          .filter((c) => !c.parentId && !c.resolved)
+          .map((c) => ({ id: c.id, r: rangeOf(ydoc, c) }))
+          .filter((x): x is { id: number; r: { from: number; to: number } } => !!x.r)
+          .map((x) => ({ id: x.id, ...x.r })),
+      );
+    place();
+    // Once the note's text has arrived, and as anyone edits it, find the anchors again (a moment
+    // after the edits settle).
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const later = () => (clearTimeout(t), (t = setTimeout(place, 250)));
+    provider.on("sync", place);
+    ytext.observe(later);
+    return () => {
+      clearTimeout(t);
+      provider.off("sync", place);
+      ytext.unobserve(later);
+    };
+  }, [comments, ydoc]);
+  const commentOnSelection = async () => {
+    const sel = editor.current?.selectedOrLine();
+    if (!sel || !sel.text.trim()) return toast("Select the words to comment on");
+    const quote = sel.text.trim().slice(0, 300);
+    const words = await promptDialog({ title: "Comment", label: `On “${quote.length > 80 ? quote.slice(0, 80) + "…" : quote}”`, placeholder: "Your comment (@Name tells someone)", action: "Comment" });
+    if (!words) return;
+    try {
+      await addComment(vaultId, noteId, { body: words, quote, ...anchorsFor(ytext, sel.from, sel.to) });
+      toast("Commented: it's in the side panel");
+    } catch (e) {
+      toastError(e);
+    }
+  };
+
 
   // Ready to edit from the copy on this device once it has loaded, before (or without) the server.
   const [localReady, setLocalReady] = useState(false);
@@ -210,6 +302,14 @@ export function NoteView(props: Props) {
       void local.destroy();
     };
   }, [local]);
+
+  // Back where you were in this note on this device, once its text is here.
+  const placed = useRef<number | null>(null);
+  useEffect(() => {
+    if (placed.current === noteId || !(synced || localReady) || !text) return;
+    placed.current = noteId;
+    editor.current?.restorePlace();
+  }, [synced, localReady, noteId, text !== ""]);
 
   useEffect(() => {
     setSynced(false);
@@ -284,8 +384,37 @@ export function NoteView(props: Props) {
     if (previewRef.current) hydrate(previewRef.current, { vaultId, notes: props.notes, ancestors: [noteId], onOpen: (t) => props.onOpenLink(t, note?.path ?? "") });
   }, [html]);
 
+  // Hover previews of the links in reading view (web/lib/hoverPreview.ts).
+  const notesNow = useRef(props.notes);
+  notesNow.current = props.notes;
+  const showsPreview = effectiveMode === "split" || effectiveMode === "read";
+  useEffect(() => {
+    if (!showsPreview || !previewRef.current) return;
+    return attachHoverPreviews(previewRef.current, () => ({ vaultId, notes: notesNow.current }));
+  }, [showsPreview, vaultId, noteId]);
+
   function onPreviewClick(e: React.MouseEvent) {
     const el = e.target as HTMLElement;
+    // A picture (not one that's a link) shows on its own.
+    if (el instanceof HTMLImageElement && !el.closest("a, .link-card, .web-card, .dataviewjs-block")) {
+      openLightbox(el.currentSrc || el.src, el.alt);
+      return;
+    }
+    // A code block's Copy: its text, as written.
+    const copy = el.closest(".code-copy");
+    if (copy) {
+      const code = copy.closest(".code-block")?.querySelector("code")?.textContent ?? "";
+      void navigator.clipboard.writeText(code).then(() => toast("Code copied"), toastError);
+      return;
+    }
+    // [TOC] (F28): the n-th heading of the note's own text, not of a note embedded in it.
+    const toc = el.closest("a.toc-link") as HTMLAnchorElement | null;
+    if (toc) {
+      e.preventDefault();
+      const own = [...(previewRef.current?.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6") ?? [])].filter((h) => !h.closest(".note-embed, .link-card"));
+      own[Number(toc.dataset.heading)]?.scrollIntoView({ block: "start", behavior: "smooth" });
+      return;
+    }
     const link = el.closest("a.internal-link") as HTMLAnchorElement | null;
     if (link) {
       e.preventDefault();
@@ -416,6 +545,13 @@ export function NoteView(props: Props) {
     }
   }
 
+  // Its AI-XF id (F9), read from the live text so a new one shows at once.
+  const aixfId = useMemo(() => {
+    if (board || !text.startsWith("---")) return null;
+    const id = parseFrontmatter(text).data.id;
+    return typeof id === "string" ? id : null;
+  }, [text, board]);
+
   // What this note can do, for the ⋯ menu, the ⌘K palette and the editor's / menu. Published
   // after each render, and withdrawn on unmount only if it's still this note's.
   const actions: NoteActions = {
@@ -429,17 +565,31 @@ export function NoteView(props: Props) {
     downloadHref: `/api/vaults/${vaultId}/notes/${noteId}/export`,
     setMode: setModeSaved,
     history: () => setHistory(true),
+    shareLink: () => note && void shareByLink(vaultId, noteId, note.title, !readOnly),
+    sendToLongview: note && note.type?.toLowerCase() === "weblink" && longviewOn ? () => void sendToLongview(vaultId, noteId, note.title) : undefined,
+    floe: floeLandscape ? { update: () => void updateLandscape(vaultId, floeLandscape), open: floeOn && floeWeb() ? () => openInFloe(floeLandscape) : null } : undefined,
+    floeDiagrams: floeOn && text.includes("%% floe:") && !floeLandscape ? () => void refreshFloeDiagrams(vaultId, noteId) : undefined,
+    following,
+    setFollowing: (on) =>
+      void api<{ following: boolean }>(`/vaults/${vaultId}/notes/${noteId}/follow`, { method: "PUT", body: { on } }).then(
+        (r) => (setFollowingState(r.following), toast(r.following ? "Following: you'll be told when someone else changes it" : "Not following any more")),
+        toastError,
+      ),
     copyLink: () => void navigator.clipboard?.writeText(`[[${note?.title}]]`).then(() => toast("Wikilink copied"), toastError),
+    aixfId: aixfId,
     rename: () => setRenaming(true),
     moveTo: () => note && void moveToPicker(vaultId, { kind: "note", id: noteId, path: note.path }, props.folders, props.onMoved),
     sendTo: (move) => note && void sendToVault(vaultId, { kind: "note", id: noteId, path: note.path }, move, props.onMoved),
     canSend: otherVaults(vaultId).length > 0,
     trash: () => void remove(),
     pickPicture: () => picker.current?.click(),
+    comment: readOnly ? undefined : () => void commentOnSelection(),
     insertTemplate: () => void insertTemplate(),
     askHere: (a) => void askHere(a),
     bookmark: () => note && void toggleBookmark(vaultId, noteId, note.title),
     bookmarked: isBookmarked(noteId),
+    vaultId,
+    look: { icon, cover: summary?.cover ?? null, width: summary?.width ?? null },
   };
   useEffect(() => {
     provide("note", actions);
@@ -468,12 +618,12 @@ export function NoteView(props: Props) {
   }
 
   return (
-    <div className={`note-view mode-${effectiveMode}`} ref={viewRef}>
+    <div className={`note-view mode-${effectiveMode}${summary?.width ? ` width-${summary.width}` : ""}`} ref={viewRef}>
       <header className="note-header" ref={headerRef}>
         <PanelToggle side="left" open={props.leftOpen} onToggle={props.onToggleLeft} />
         <div className="note-title-wrap">
           <div className="breadcrumb">
-            {(summary?.path ?? note?.path) && !isTypePath(summary?.path ?? note!.path) && <TypeChip vaultId={vaultId} noteId={noteId} type={summary ? (summary.type ?? null) : (note?.type ?? null)} readOnly={readOnly} />}
+            {(summary?.path ?? note?.path) && !board && !isTypePath(summary?.path ?? note!.path) && <TypeChip vaultId={vaultId} noteId={noteId} type={summary ? (summary.type ?? null) : (note?.type ?? null)} readOnly={readOnly} />}
             {folder && <span>{folder.split("/").join(" / ")}</span>}
           </div>
           {renaming && !readOnly ? (
@@ -493,12 +643,14 @@ export function NoteView(props: Props) {
             />
           ) : readOnly ? (
             <h1 className="note-title" title={note?.path}>
+              {icon && <span className="note-icon">{icon}</span>}
               {note?.title ?? "…"}
             </h1>
           ) : (
             // A button inside the heading: the title is still the page's heading, and Tab, Enter or
             // a click renames it.
             <h1 className="note-title">
+              {icon && <span className="note-icon">{icon}</span>}
               <button ref={titleButton} type="button" className="title-button" onClick={() => setRenaming(true)} title="Rename" aria-label={`Rename “${note?.title ?? ""}”`}>
                 {note?.title ?? "…"}
               </button>
@@ -531,7 +683,7 @@ export function NoteView(props: Props) {
           </div>
           <span className={`conn conn-${status}`} title={status === "connected" ? "Live — changes save automatically" : status === "connecting" ? "Connecting…" : "Offline — edits will sync when you reconnect"} />
           {readOnly && <span className="badge">Read only</span>}
-          {!readOnly && (
+          {!readOnly && !board && (
             narrow ? (
               // On a phone, one toggle keeps room for the title; Source mode is in the ⋯ menu.
               <button
@@ -559,6 +711,17 @@ export function NoteView(props: Props) {
               </div>
             )
           )}
+          {!narrow && !board && (
+            <button
+              className={`icon-btn${fullWidth ? " on" : ""}`}
+              onClick={() => setFullWidth(!fullWidth)}
+              aria-pressed={fullWidth}
+              aria-label="Full-width editor"
+              title={fullWidth ? "Normal editor width" : "Full-width editor"}
+            >
+              <Icon name="width" />
+            </button>
+          )}
           <Menu label="More" items={() => noteMenu().map((c) => ({ label: c.title, icon: c.icon, danger: c.danger, href: c.href?.(currentCtx()), onSelect: c.href ? undefined : () => c.run(currentCtx()) }))} />
           <PanelToggle side="right" open={props.rightOpen} onToggle={props.onToggleRight} />
         </div>
@@ -571,12 +734,34 @@ export function NoteView(props: Props) {
       )}
       {note && isTypePath(note.path) && <TypeEditor vaultId={vaultId} name={note.title} readOnly={readOnly} />}
       {/* data-synced: the live socket has synced (tests wait on it instead of sleeping). */}
+      {cover && (
+        <div className="note-cover">
+          <img src={cover} alt="" referrerPolicy="no-referrer" />
+        </div>
+      )}
+      {board ? (
+        <div className="note-body board-body-wrap" data-synced={synced || undefined}>
+          {!synced && !localReady && <div className="loading-bar" />}
+          <Board
+            ydoc={ydoc}
+            awareness={provider.awareness}
+            vaultId={vaultId}
+            notes={props.notes}
+            readOnly={readOnly || !(synced || localReady)}
+            ready={synced || localReady}
+            folder={folder}
+            onOpenLink={(target) => props.onOpenLink(target, note?.path ?? "")}
+            onActions={(a) => provide("board", a)}
+          />
+        </div>
+      ) : (
       <div className="note-body" data-synced={synced || undefined}>
         {!synced && !localReady && <div className="loading-bar" />}
         <div className="pane edit-pane" hidden={effectiveMode === "read"}>
           <Editor
             ref={editor}
             ytext={ytext}
+            commentRanges={commentRanges}
             awareness={provider.awareness}
             readOnly={readOnly || !(synced || localReady)}
             livePreview={effectiveMode === "edit"}
@@ -588,12 +773,20 @@ export function NoteView(props: Props) {
             typeNote={!!note && isTypePath(note.path)}
             noteId={noteId}
             typewriter={focusMode}
+            onStats={setStats}
+            placeKey={`${vaultId}:${noteId}`}
           />
         </div>
+        {!narrow && stats.words > 0 && (
+          <div className="note-stats" aria-live="off">
+            {stats.selected ? `${stats.selected.toLocaleString()} of ${stats.words.toLocaleString()} words` : `${stats.words.toLocaleString()} ${stats.words === 1 ? "word" : "words"} · ${readingMinutes(stats.words)} min read`}
+          </div>
+        )}
         {(effectiveMode === "split" || effectiveMode === "read") && <div className="pane preview markdown" ref={previewRef} onClick={onPreviewClick} dangerouslySetInnerHTML={{ __html: html }} />}
       </div>
+      )}
 
-      {!readOnly && effectiveMode !== "read" && (
+      {!readOnly && !board && effectiveMode !== "read" && (
         <div className="format-bar only-touch">
           <button onClick={() => editor.current?.insert("[[")} aria-label="Link">[[ ]]</button>
           <button onClick={() => editor.current?.insert("#")} aria-label="Tag">#</button>

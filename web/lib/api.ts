@@ -54,6 +54,16 @@ export interface Vault {
   member_count: number;
   /** "owner/name" when it's a copy of a GitHub repo (F14). */
   git_repo?: string | null;
+  /** Its folder under the Mac's folders, when it's kept in one (F22). */
+  folder?: string | null;
+  /** In the cloud library, reached through this Mac (F23). */
+  cloud?: boolean;
+  /** New notes get an AI-XF id (F9). */
+  note_ids?: boolean;
+  /** Your id in the cloud library, for a cloud collection (it differs from yours here). */
+  me?: number;
+  /** The cloud couldn't be reached: the collection as it was last seen. */
+  offline?: boolean;
 }
 export interface NoteSummary {
   id: number;
@@ -66,6 +76,12 @@ export interface NoteSummary {
   created_at?: string;
   /** Other names links can use (its aliases and id, lowercased); null if none. */
   aliases?: string[] | null;
+  /** Its aliases as written, for the [[ suggestions; null if none. */
+  names?: string[] | null;
+  /** Its look (F28), from its properties: `icon` (shown only if an emoji), `cover`, `width`. */
+  icon?: string | null;
+  cover?: string | null;
+  width?: "wide" | "full" | null;
 }
 export interface Note extends NoteSummary {
   vault_id: number;
@@ -85,6 +101,8 @@ export interface Session {
   setupTokenRequired: boolean;
   allowSignup: boolean;
   search: { semantic: boolean; provider: string };
+  /** This server can keep collections in folders on the Mac (F22, the laptop kit). */
+  folders?: boolean;
   /** Admins only: how full the database is (src/storage.ts). */
   storage?: { state: "ok" | "warn" | "full"; used: number; limit: number | null };
 }

@@ -1,0 +1,336 @@
+# Commonplace for iPhone (ios/README.md). XcodeGen makes Commonplace.xcodeproj from this file:
+# `xcodegen` in ios/. The project, Info.plists and entitlements it writes are not kept in git.
+name: Commonplace
+options:
+  bundleIdPrefix: com.davidroliver
+  deploymentTarget:
+    iOS: "17.0"
+    macOS: "14.0"
+  createIntermediateGroups: true
+configFiles:
+  Debug: Config/Debug.xcconfig
+  Release: Config/Release.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    TARGETED_DEVICE_FAMILY: "1,2"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+
+targets:
+  Commonplace:
+    type: application
+    platform: iOS
+    sources: [App, Shared, Intents, Assets.xcassets]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID)
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: DO Notes
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CPServerURL: $(SERVER_SCHEME)://$(SERVER_HOST)
+        CPAppGroup: $(APP_GROUP)
+        UILaunchScreen:
+          UIColorName: ""
+        UIApplicationSupportsIndirectInputEvents: true
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        ITSAppUsesNonExemptEncryption: false
+        # Reminders for dated tasks (F35) refresh in the background now and then.
+        UIBackgroundModes: [fetch]
+        BGTaskSchedulerPermittedIdentifiers: [com.davidroliver.commonplace.reminders]
+        # The service worker (offline, F4) runs in a web view only on the app's own domains.
+        WKAppBoundDomains: [$(SERVER_DOMAIN)]
+        # Plain http only to the Mac's own kit, for the simulator.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        # The web client's file inputs offer the camera and the photo library.
+        NSCameraUsageDescription: Take a photo to add to a note.
+        NSPhotoLibraryUsageDescription: Choose photos to add to a note.
+        NSPhotoLibraryAddUsageDescription: Save pictures from your notes to Photos.
+        # Voice notes (quick capture): recorded, then written down on the device.
+        NSMicrophoneUsageDescription: Record a voice note for your Inbox.
+        NSSpeechRecognitionUsageDescription: Write down what you said in a voice note, so you can read and search it.
+        CFBundleURLTypes:
+          - CFBundleURLName: $(APP_BUNDLE_ID)
+            CFBundleURLSchemes: [commonplace]
+    entitlements:
+      path: App/Commonplace.entitlements
+      properties:
+        com.apple.security.application-groups: [$(APP_GROUP)]
+        # The ?mode=developer twins let a development build (on a phone with Settings → Developer →
+        # Associated Domains Development on) read the file straight from the server instead of
+        # Apple's CDN, which can hold an old answer for a day; App Store builds ignore them.
+        com.apple.developer.associated-domains: [applinks:$(SERVER_DOMAIN), webcredentials:$(SERVER_DOMAIN), "applinks:$(SERVER_DOMAIN)?mode=developer", "webcredentials:$(SERVER_DOMAIN)?mode=developer"]
+    dependencies:
+      - target: Share
+      - target: Widget
+
+  # The home-screen and lock-screen widgets (F36): a tap opens quick capture.
+  Widget:
+    type: app-extension
+    platform: iOS
+    sources: [Widget]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID).widget
+    info:
+      path: Widget/Info.plist
+      properties:
+        CFBundleDisplayName: DO Notes
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+
+  Share:
+    type: app-extension
+    platform: iOS
+    sources: [Share, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID).share
+    info:
+      path: Share/Info.plist
+      properties:
+        CFBundleDisplayName: DO Notes
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CPServerURL: $(SERVER_SCHEME)://$(SERVER_HOST)
+        CPAppGroup: $(APP_GROUP)
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            # What the Shortcut took: a link, text, or up to 10 photos (src/capture.ts MAX_ITEMS).
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+              NSExtensionActivationSupportsWebPageWithMaxCount: 1
+              NSExtensionActivationSupportsText: true
+              NSExtensionActivationSupportsImageWithMaxCount: 10
+    entitlements:
+      path: Share/Share.entitlements
+      properties:
+        com.apple.security.application-groups: [$(APP_GROUP)]
+
+  # The Mac app: the same web client in windows, Settings for the server, a share extension.
+  CommonplaceMac:
+    type: application
+    platform: macOS
+    sources: [Mac, Shared, Intents, Assets.xcassets]
+    settings:
+      base:
+        PRODUCT_NAME: DO Notes
+        PRODUCT_MODULE_NAME: Commonplace
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID)
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_HARDENED_RUNTIME: YES
+        COMBINE_HIDPI_IMAGES: YES
+    info:
+      path: Mac/Info.plist
+      properties:
+        CFBundleDisplayName: DO Notes
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CPServerURL: $(CLOUD_SCHEME)://$(CLOUD_HOST)
+        CPAppGroup: $(MAC_APP_GROUP)
+        CPKeychainGroup: $(AppIdentifierPrefix)$(APP_BUNDLE_ID).shared
+        LSApplicationCategoryType: public.app-category.productivity
+        NSMicrophoneUsageDescription: Record a voice note for your Inbox.
+        NSSpeechRecognitionUsageDescription: Write down what you said in a voice note, so you can read and search it.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        CFBundleURLTypes:
+          - CFBundleURLName: $(APP_BUNDLE_ID)
+            CFBundleURLSchemes: [commonplace]
+    entitlements:
+      path: Mac/Commonplace.entitlements
+      properties:
+        # Passkeys and password autofill in the web view, and links that open the app (the
+        # server's apple-app-site-association names this app). The cloud only: the kit is
+        # localhost, which can't be an associated domain.
+        com.apple.developer.associated-domains: [applinks:$(CLOUD_HOST), webcredentials:$(CLOUD_HOST), "applinks:$(CLOUD_HOST)?mode=developer", "webcredentials:$(CLOUD_HOST)?mode=developer"]
+        # The keychain group the app and the extension share the capture token in.
+        keychain-access-groups: [$(AppIdentifierPrefix)$(APP_BUNDLE_ID).shared]
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.files.user-selected.read-write: true
+        com.apple.security.files.downloads.read-write: true
+        # Voice notes in quick capture.
+        com.apple.security.device.audio-input: true
+        com.apple.security.application-groups: [$(MAC_APP_GROUP)]
+    dependencies:
+      - target: MacShare
+      - target: SafariClipper
+
+  MacShare:
+    type: app-extension
+    platform: macOS
+    sources: [MacShare, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID).share
+        ENABLE_HARDENED_RUNTIME: YES
+    info:
+      path: MacShare/Info.plist
+      properties:
+        CFBundleDisplayName: DO Notes
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CPServerURL: $(CLOUD_SCHEME)://$(CLOUD_HOST)
+        CPAppGroup: $(MAC_APP_GROUP)
+        CPKeychainGroup: $(AppIdentifierPrefix)$(APP_BUNDLE_ID).shared
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+              NSExtensionActivationSupportsWebPageWithMaxCount: 1
+              NSExtensionActivationSupportsText: true
+              NSExtensionActivationSupportsImageWithMaxCount: 10
+    entitlements:
+      path: MacShare/Share.entitlements
+      properties:
+        # The keychain group the app and the extension share the capture token in.
+        keychain-access-groups: [$(AppIdentifierPrefix)$(APP_BUNDLE_ID).shared]
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.application-groups: [$(MAC_APP_GROUP)]
+
+  # The DO Notes Clipper in Safari (F37): clipper/ as a Safari web extension, with the app's token.
+  SafariClipper:
+    type: app-extension
+    platform: macOS
+    sources:
+      - SafariClipper
+      - Shared/AppConfig.swift
+      - Shared/TokenStore.swift
+      - path: ../clipper/manifest.json
+        buildPhase: resources
+      - path: ../clipper/background.js
+        buildPhase: resources
+      - path: ../clipper/clip.js
+        buildPhase: resources
+      - path: ../clipper/popup.html
+        buildPhase: resources
+      - path: ../clipper/popup.js
+        buildPhase: resources
+      - path: ../clipper/options.html
+        buildPhase: resources
+      - path: ../clipper/options.js
+        buildPhase: resources
+      - path: ../clipper/clipper.css
+        buildPhase: resources
+      - path: ../clipper/icons
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID).safari
+        ENABLE_HARDENED_RUNTIME: YES
+    info:
+      path: SafariClipper/Info.plist
+      properties:
+        CFBundleDisplayName: DO Notes Clipper
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CPServerURL: $(CLOUD_SCHEME)://$(CLOUD_HOST)
+        CPAppGroup: $(MAC_APP_GROUP)
+        CPKeychainGroup: $(AppIdentifierPrefix)$(APP_BUNDLE_ID).shared
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.Safari.web-extension
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SafariWebExtensionHandler
+    entitlements:
+      path: SafariClipper/SafariClipper.entitlements
+      properties:
+        keychain-access-groups: [$(AppIdentifierPrefix)$(APP_BUNDLE_ID).shared]
+        com.apple.security.app-sandbox: true
+        com.apple.security.application-groups: [$(MAC_APP_GROUP)]
+
+  CommonplaceMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/Unit
+        excludes: [LiveCaptureTests.swift]
+      - Tests/MacUnit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID).mactests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/DO Notes.app/Contents/MacOS/DO Notes
+        BUNDLE_LOADER: $(TEST_HOST)
+    dependencies:
+      - target: CommonplaceMac
+
+  CommonplaceMacUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources: [Tests/MacUI]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID).macuitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: CommonplaceMac
+    dependencies:
+      - target: CommonplaceMac
+
+  CommonplaceTests:
+    type: bundle.unit-test
+    platform: iOS
+    # Run inside the app, so the keychain test has the app group's entitlement.
+    sources: [Tests/Unit]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID).tests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: Commonplace
+
+  CommonplaceUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [Tests/UI]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID).uitests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: Commonplace
+
+schemes:
+  Commonplace:
+    build:
+      targets:
+        Commonplace: all
+        Share: all
+        Widget: all
+    test:
+      config: Debug
+      targets: [CommonplaceTests, CommonplaceUITests]
+    run:
+      config: Debug
+    archive:
+      config: Release
+  CommonplaceMac:
+    build:
+      targets:
+        CommonplaceMac: all
+        MacShare: all
+        SafariClipper: all
+    test:
+      config: Debug
+      targets: [CommonplaceMacTests, CommonplaceMacUITests]
+    run:
+      config: Debug
+    archive:
+      config: Release

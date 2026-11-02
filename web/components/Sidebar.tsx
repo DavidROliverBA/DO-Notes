@@ -4,8 +4,10 @@
 // (web/lib/useTreeDrag.tsx). Which folders are open, the sort and the Types fold are remembered on
 // this device (localStorage); the tab and search query live in App.
 
+import { exportAixf } from "../lib/aixf";
+import { emojiIcon } from "../lib/look";
 import { ThemeButton } from "./ThemeButton";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api, type NoteSummary, type Session, type Vault } from "../lib/api";
 import { allFolders, type DragItem } from "../lib/move";
 import { moveItem, moveToPicker, otherVaults, sendToVault } from "../lib/moving";
@@ -17,12 +19,14 @@ import { useBookmarks } from "../lib/bookmarks";
 import { removeSearch, useSavedSearches } from "../lib/savedSearches";
 import { useTreeDrag } from "../lib/useTreeDrag";
 import { Icon } from "../ui/Icon";
-import { Menu } from "../ui/Menu";
+import { Menu, MenuPopover } from "../ui/Menu";
 import { promptDialog, toast, toastError } from "../ui/overlays";
 import { openHelp } from "../lib/help";
 import { openSettings } from "../lib/settings";
+import { newJournalEntry } from "../lib/journal";
 import { SearchPanel } from "./SearchPanel";
 import { Invitations } from "./Invitations";
+import { BellButton } from "./Notifications";
 
 interface TreeNode {
   name: string;
@@ -107,6 +111,12 @@ function ShortcutsSection({ vaultId, notes, activeId, onNavigate, onSearch }: { 
           <button className={`type-row${path === `/v/${vaultId}/tasks` ? " active" : ""}`} onClick={() => go(`/v/${vaultId}/tasks`)}>
             <Icon name="check" size={16} />
             <span className="type-row-name">Tasks</span>
+          </button>
+        </li>
+        <li>
+          <button className={`type-row${path === `/v/${vaultId}/journal` ? " active" : ""}`} onClick={() => go(`/v/${vaultId}/journal`)}>
+            <Icon name="book" size={16} />
+            <span className="type-row-name">Journal</span>
           </button>
         </li>
       </ul>
@@ -210,17 +220,59 @@ function TypesSection({ vaultId, canWrite, onNewType, onNavigate, sort, setSort 
   );
 }
 
+/** Today: a press opens today's note; press and hold (or right-click) offers a journal entry
+ *  too (F24), the quick way in on the iPhone. */
+function TodayButton({ onDaily }: { onDaily: () => void }) {
+  const button = useRef<HTMLButtonElement>(null);
+  const [menu, setMenu] = useState(false);
+  const held = useRef<{ timer?: ReturnType<typeof setTimeout>; fired?: boolean }>({});
+  const release = () => clearTimeout(held.current.timer);
+  return (
+    <>
+      <button
+        ref={button}
+        className="today-button"
+        onClick={() => (held.current.fired ? (held.current.fired = false) : onDaily())}
+        onPointerDown={() => {
+          held.current.fired = false;
+          held.current.timer = setTimeout(() => ((held.current.fired = true), setMenu(true)), 500);
+        }}
+        onPointerUp={release}
+        onPointerLeave={release}
+        onPointerCancel={release}
+        onContextMenu={(e) => (e.preventDefault(), release(), setMenu(true))}
+        title="Today's daily note (press and hold for a journal entry)"
+        aria-haspopup="menu"
+      >
+        <Icon name="calendar" /> <span>Today</span>
+      </button>
+      {menu && button.current && (
+        <MenuPopover
+          label="Today"
+          anchor={button.current}
+          align="left"
+          items={[
+            { label: "Today's note", icon: "calendar", onSelect: onDaily },
+            { label: "New journal entry", icon: "edit", onSelect: newJournalEntry },
+          ]}
+          onClose={(refocus) => (setMenu(false), refocus && button.current?.focus())}
+        />
+      )}
+    </>
+  );
+}
+
 /** The collection menu (F20): home first, then by name; grouped by where each is kept once there's
- *  more than one place. */
+ *  more than one place (a folder on the Mac: F22; the cloud library, from the Mac: F23). */
 function switcherGroups(vaults: Vault[]): { label: string | null; vaults: Vault[] }[] {
   const sorted = [...vaults].sort((a, b) => Number(!!b.home) - Number(!!a.home) || a.name.localeCompare(b.name));
-  const here = sorted.filter((v) => !v.git_repo);
-  const github = sorted.filter((v) => v.git_repo);
-  if (!here.length || !github.length) return [{ label: null, vaults: sorted }];
-  return [
-    { label: "In this library", vaults: here },
-    { label: "From GitHub", vaults: github },
-  ];
+  const groups = [
+    { label: "In this library", vaults: sorted.filter((v) => !v.git_repo && !v.folder && !v.cloud) },
+    { label: "In folders on this Mac", vaults: sorted.filter((v) => v.folder) },
+    { label: "From GitHub", vaults: sorted.filter((v) => v.git_repo) },
+    { label: "In the cloud", vaults: sorted.filter((v) => v.cloud) },
+  ].filter((g) => g.vaults.length);
+  return groups.length > 1 ? groups : [{ label: null, vaults: sorted }];
 }
 const vaultOption = (v: Vault) => (
   <option key={v.id} value={v.id}>
@@ -383,6 +435,7 @@ export function Sidebar(p: Props) {
                         { label: "Copy to another collection…", icon: "copy", hidden: !otherVaults(p.vault.id).length, onSelect: () => void sendToVault(p.vault.id, { kind: "folder", path: f.path }, false, p.onFoldersChanged) },
                         { label: "Move to another collection…", icon: "vault", hidden: !otherVaults(p.vault.id).length, onSelect: () => void sendToVault(p.vault.id, { kind: "folder", path: f.path }, true, p.onFoldersChanged) },
                         { label: "Show in graph", icon: "graph", onSelect: () => (navigate(graphUrl(p.vault.id, { folder: f.path })), p.onNavigate()) },
+                        { label: "Export as AI-XF bundle", icon: "download", onSelect: () => void exportAixf(p.vault.id, canWrite, f.path) },
                         { label: "Delete empty folder", icon: "trash", danger: true, hidden: f.notes.length > 0 || f.folders.size > 0, onSelect: () => void deleteFolder(f.path) },
                       ]}
                     />
@@ -407,7 +460,14 @@ export function Sidebar(p: Props) {
                 p.onNavigate();
               }}
             >
-              <span className="tree-label">{n.title}</span>
+              <span className="tree-label">
+                {emojiIcon(n.icon) ? <span className="note-icon">{emojiIcon(n.icon)}</span> : /\.canvas$/i.test(n.path) && (
+                    <span className="note-icon tree-board" title="Board">
+                      <Icon name="graph" size={14} />
+                    </span>
+                  )}
+                {n.title}
+              </span>
             </a>
           </li>
         ))}
@@ -472,11 +532,7 @@ export function Sidebar(p: Props) {
             <Icon name="folder-plus" />
           </button>
         )}
-        {canWrite && (
-          <button onClick={p.onDaily} title="Today's daily note">
-            <Icon name="calendar" /> <span>Today</span>
-          </button>
-        )}
+        {canWrite && <TodayButton onDaily={p.onDaily} />}
         <button
           onClick={() => {
             navigate(`/v/${p.vault.id}/graph`);
@@ -539,6 +595,7 @@ export function Sidebar(p: Props) {
           <span className="account-name">{p.session.user!.name}</span>
           <Icon name="user" size={16} />
         </button>
+        <BellButton vaultId={p.vault.id} />
         <button className="icon-btn" onClick={() => openHelp()} title="Help" aria-label="Help">
           <Icon name="help" size={16} />
         </button>

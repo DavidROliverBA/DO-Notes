@@ -74,6 +74,10 @@ export function hydrate(root: HTMLElement, ctx: EmbedCtx): void {
     card.dataset.done = "1";
     void fillCard(card, card.dataset.card!, ctx);
   }
+  for (const card of root.querySelectorAll<HTMLElement>(".web-card[data-url]:not([data-done])")) {
+    card.dataset.done = "1";
+    void fillWebCard(card, card.dataset.url!, ctx.vaultId);
+  }
   drawDiagrams(root, ctx.onOpen);
   const dv = { vaultId: ctx.vaultId, noteId: ctx.ancestors.at(-1) ?? null, notes: () => ctx.notes, onOpen: ctx.onOpen };
   fillDataview(root, dv);
@@ -177,4 +181,48 @@ export async function fillCard(card: HTMLElement, target: string, ctx: EmbedCtx)
   box.append(icon, main, props);
   card.replaceChildren(box);
   card.classList.add("is-card");
+}
+
+// ── Link cards for web addresses (F28) ───────────────────────────────────────────────────────
+
+interface PageMeta {
+  title: string;
+  description: string;
+  site: string;
+  image: string | null;
+  url: string;
+}
+const pages = new Map<string, Promise<PageMeta | null>>();
+
+/** A web address alone on its line, as a card: the page's picture, title, summary and site. If
+ *  the page can't be read (offline, the standalone file), the plain link inside stays. */
+export async function fillWebCard(box: HTMLElement, url: string, vaultId: number): Promise<void> {
+  const key = `${vaultId} ${url}`;
+  if (!pages.has(key)) pages.set(key, api<PageMeta>(`/vaults/${vaultId}/linkcard?url=${encodeURIComponent(url)}`).catch(() => null));
+  const meta = await pages.get(key)!;
+  if (!meta?.title) {
+    pages.delete(key); // try again next time
+    return;
+  }
+  const a = document.createElement("a");
+  a.className = "web-card-link";
+  a.href = /^https?:/i.test(url) ? url : "#";
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  if (meta.image && /^https:/i.test(meta.image)) {
+    const img = document.createElement("img");
+    img.src = meta.image;
+    img.alt = "";
+    img.loading = "lazy";
+    img.referrerPolicy = "no-referrer";
+    img.onerror = () => img.remove();
+    a.append(img);
+  }
+  const text = el("span", "web-card-text");
+  text.append(el("strong", "web-card-title", meta.title));
+  if (meta.description) text.append(el("span", "web-card-desc", meta.description));
+  text.append(el("small", "web-card-site", meta.site));
+  a.append(text);
+  box.replaceChildren(a);
+  box.classList.add("filled");
 }

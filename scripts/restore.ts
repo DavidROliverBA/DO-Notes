@@ -69,6 +69,15 @@ for (const side of sidecars.sort((a, b) => parseInt(a) - parseInt(b))) {
     if (rows.length) await sql`insert into note_revisions ${sql(rows)}`;
     versions += rows.length;
   }
+  // Comments (L3), with replies kept under their threads.
+  const commentIds = new Map<number, number>();
+  for (const c of (meta.comments ?? []) as { path: string; id: number; parent_id: number | null; author: string | null; quote: string; anchor_from: string | null; anchor_to: string | null; body: string; created_at: string; edited_at: string | null; resolved_at: string | null }[]) {
+    const [n] = await sql`select id from notes where vault_id = ${vault.id} and path = ${c.path}`;
+    if (!n) continue;
+    const [row] = await sql`insert into comments (vault_id, note_id, author_id, parent_id, quote, anchor_from, anchor_to, body, created_at, edited_at, resolved_at)
+      values (${vault.id}, ${n.id}, ${(c.author && emailId.get(c.author.toLowerCase())) ?? null}, ${c.parent_id ? (commentIds.get(c.parent_id) ?? null) : null}, ${c.quote}, ${c.anchor_from}, ${c.anchor_to}, ${c.body}, ${c.created_at}, ${c.edited_at}, ${c.resolved_at}) returning id`;
+    commentIds.set(c.id, Number(row!.id));
+  }
   for (const t of meta.trash as { path: string; content: string; revisions: unknown; created_at: string; deleted_at: string }[]) {
     await sql`insert into trashed_notes (vault_id, path, content, revisions, created_at, deleted_at)
               values (${vault.id}, ${t.path}, ${t.content}, ${sql.json(t.revisions as any)}, ${t.created_at}, ${t.deleted_at})`;

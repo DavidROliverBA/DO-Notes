@@ -64,7 +64,7 @@ export interface WikiLink {
   to: number;
 }
 
-export const WIKILINK = /(!?)\[\[([^\[\]|\n]+?)(?:\|([^\[\]\n]*))?\]\]/g;
+export const WIKILINK = /(!?)\[\[([^\[\]|\n]+?)(?:\\?\|([^\[\]\n]*))?\]\]/g;
 
 export function findWikiLinks(md: string): WikiLink[] {
   const masked = maskCode(md);
@@ -72,7 +72,7 @@ export function findWikiLinks(md: string): WikiLink[] {
   for (const m of masked.matchAll(WIKILINK)) {
     // Read the real text back from the unmasked source at the same offsets.
     const raw = md.slice(m.index!, m.index! + m[0].length);
-    const mm = /^(!?)\[\[([^\[\]|\n]+?)(?:\|([^\[\]\n]*))?\]\]$/.exec(raw)!;
+    const mm = /^(!?)\[\[([^\[\]|\n]+?)(?:\\?\|([^\[\]\n]*))?\]\]$/.exec(raw)!;
     out.push({
       target: mm[2]!.trim(),
       alias: mm[3]?.trim() || undefined,
@@ -113,15 +113,19 @@ export function extractLinks(md: string): string[] {
   return [...targets];
 }
 
-// .base (Bases files: saved views, F16) and .canvas files travel with the vault like attachments.
-const ATTACHMENT_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif|heic|pdf|mp3|m4a|wav|ogg|mp4|mov|webm|csv|zip|txt|base|canvas)$/i;
+// .base files (Bases: saved views, F16) travel with the vault like attachments. .canvas files are
+// boards (F11, src/canvas.ts), kept as notes.
+const ATTACHMENT_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif|heic|pdf|mp3|m4a|wav|ogg|mp4|mov|webm|csv|zip|txt|base)$/i;
 
 /** A vault's site settings (F18): a file at the top level, so it travels with the vault. */
 export const SITE_SETTINGS = "publish.json";
 
+/** A collection's AI-XF manifest (F9): kept at the top level, so its namespace never changes. */
+export const AIXF_MANIFEST = "manifest.ai-xf.yaml";
+
 export function isAttachmentPath(p: string): boolean {
   const path = p.split("#")[0]!.trim();
-  return ATTACHMENT_EXT.test(path) || path === SITE_SETTINGS;
+  return ATTACHMENT_EXT.test(path) || path === SITE_SETTINGS || path === AIXF_MANIFEST;
 }
 
 export interface Heading {
@@ -130,10 +134,18 @@ export interface Heading {
   line: number;
 }
 
+/** Words in some text: runs between spaces with a letter or digit in them, so markdown's own
+ *  marks (#, -, >, |) don't count. Used for the note's word count and a page's reading time. */
+export function countWords(text: string): number {
+  return text.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
+}
+/** Minutes to read that many words, at 220 a minute; at least one. */
+export const readingMinutes = (words: number) => Math.max(1, Math.round(words / 220));
+
 /** Inline markdown as plain text, for the outline: "New **bold** [[Note|alias]]" → "New bold alias". */
 export function plainInline(s: string): string {
   return s
-    .replace(/!?\[\[([^\[\]|]+?)(?:\|([^\[\]]*))?\]\]/g, (_, target: string, alias?: string) => alias?.trim() || target.replace(/#\^?/, " › ").trim())
+    .replace(/!?\[\[([^\[\]|]+?)(?:\\?\|([^\[\]]*))?\]\]/g, (_, target: string, alias?: string) => alias?.trim() || target.replace(/#\^?/, " › ").trim())
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/`([^`]+)`/g, "$1")
     .replace(/(\*\*|__|~~|==)(?=\S)(.+?)(?<=\S)\1/g, "$2")
@@ -233,15 +245,15 @@ export function chunkNote(title: string, md: string, max = 1800): Chunk[] {
     }));
 }
 
-/** "Projects/Plan.md" → "Plan". */
+/** "Projects/Plan.md" → "Plan"; a board, "Plan.canvas", is "Plan" too. */
 export function titleFromPath(path: string): string {
   const base = path.split("/").pop() ?? path;
-  return base.replace(/\.md$/i, "");
+  return base.replace(/\.(md|canvas)$/i, "");
 }
 
 /**
  * Canonical vault path: forward slashes, no leading/trailing slash, no empty or dot segments,
- * ending ".md" when `ext` says so. Throws on anything that would escape the vault on export.
+ * ending ".md" when `ext` says so (a board's ".canvas" is kept, F11). Throws on anything that would escape the vault on export.
  */
 export function normalisePath(input: string, ext: ".md" | null = ".md"): string {
   const parts = input
@@ -252,7 +264,7 @@ export function normalisePath(input: string, ext: ".md" | null = ".md"): string 
   if (parts.length === 0) throw new Error("Path is empty");
   if (parts.some((p) => p === ".." || /[\u0000-\u001f<>:"|?*]/.test(p))) throw new Error(`Invalid path: ${input}`);
   let path = parts.join("/");
-  if (ext && !path.toLowerCase().endsWith(ext)) path += ext;
+  if (ext && !path.toLowerCase().endsWith(ext) && !/\.canvas$/i.test(path)) path += ext;
   if (path.length > 512) throw new Error("Path is too long");
   return path;
 }

@@ -4,19 +4,31 @@
 import { dirname, join } from "node:path";
 import index from "../web/index.html";
 import { apiRoutes } from "./api";
-import { currentUser, sameOrigin, sessionHash } from "./auth";
+import { sameOrigin, sessionHash } from "./auth";
+import { appSiteAssociation } from "./iosApp";
 import { type CollabData, flushAll, onClose, onMessage, onOpen } from "./collab";
 import { sql } from "./db";
 import { backfill } from "./embed";
+import { readOldPdfs } from "./fileText";
 import { startScheduler } from "./gitAuto";
+import { startFolderSync } from "./folderSync";
 import { dbVersions, migrate } from "./migrate";
-import { pruneRevisions, purgeTrash } from "./notes";
+import { adoptCanvasFiles, pruneRevisions, purgeTrash } from "./notes";
+import { oauthRoutes } from "./oauth";
 import { serveSite } from "./publish";
+import { serveShared } from "./shareLink";
 import { dataviewjsSandbox } from "./sandbox";
 import { canWrite, roleIn } from "./vaults";
+import { requestUser, socketKey } from "./tokens";
+import { isCloudVault, loadAliases, type ProxyData, socketClose, socketMessage, socketOpen, socketTarget } from "./remote";
+
+/** A live socket relayed to the cloud library (F23) rather than a room here. */
+const isProxy = (ws: { data: unknown }): boolean => (ws.data as { kind?: string }).kind === "proxy";
 import { generatedSetupToken, settings } from "./settings";
 
 await migrate();
+const boards = await adoptCanvasFiles();
+if (boards) console.log(`kept ${boards} .canvas file${boards === 1 ? "" : "s"} as boards`);
 
 // Trash keeps notes for TRASH_DAYS, and each note its newest versions; tidy at boot and every
 // six hours.
@@ -30,6 +42,12 @@ setInterval(purge, 6 * 60 * 60 * 1000).unref();
 
 // Automatic pushes to GitHub (F19): due vaults are looked for once a minute.
 startScheduler();
+
+// The cloud library's collections, on the Mac (F23): their ids work before the menu is fetched.
+await loadAliases();
+
+// Folder vaults on the Mac (F22): watched, and rescanned now and then.
+void startFolderSync().catch((e) => console.error("folder sync failed to start:", e));
 
 // ── security headers (N13) ──────────────────────────────────────────────────────────────────
 // Bun's HTML-bundle route takes no headers, so the bundle is mounted at a private path and the app's
@@ -174,22 +192,46 @@ const server = Bun.serve<CollabData>({
         const file = Bun.file(join(HELP_IMAGES, name));
         return file.size ? new Response(file, { headers: { "Content-Type": "image/webp", "Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff" } }) : new Response("Not found", { status: 404 });
       },
+      // The iPhone app's links and passwords (src/iosApp.ts); nothing unless APPLE_APP_IDS is set.
+      "/.well-known/apple-app-site-association": () =>
+        settings.appleAppIds.length ? Response.json(appSiteAssociation(settings.appleAppIds)) : Response.json({ error: "Not found" }, { status: 404 }),
       "/health": async () => {
         await sql`select 1`;
         return Response.json({ ok: true });
       },
       ...apiRoutes,
+      ...oauthRoutes,
       "/api/*": () => Response.json({ error: "Not found" }, { status: 404 }),
     }),
 
     // Published sites (F18): served from their snapshot, with no app around them.
     "/p/*": (req: Request) => serveSite(req),
+    // One note shared by link (F38).
+    "/s/*": (req: Request) => serveShared(req),
 
     // Live editing socket. The y-websocket client connects to `/ws/<noteId>`.
     "/ws/:noteId": async (req: Bun.BunRequest<"/ws/:noteId">, srv: Bun.Server<CollabData>) => {
       if (!sameOrigin(req)) return new Response("Cross-origin socket refused", { status: 403 });
-      const user = await currentUser(req);
-      if (!user) return new Response("Sign in required", { status: 401 });
+      // The browser's session, or a Mac's device token (F23), whose sockets revoking closes.
+      let who;
+      try {
+        who = await requestUser(req);
+      } catch {
+        who = null;
+      }
+      if (!who) return new Response("Sign in required", { status: 401 });
+      const user = who.user;
+      // A note in a cloud collection, opened on the Mac (F23): relayed to the cloud's socket.
+      const cloudId = Number(new URL(req.url).searchParams.get("v"));
+      if (!who.deviceToken && isCloudVault(cloudId)) {
+        try {
+          const data = await socketTarget(user, cloudId, Number(req.params.noteId));
+          if ((srv as unknown as Bun.Server<ProxyData>).upgrade(req, { data })) return undefined as unknown as Response;
+          return new Response("Expected a WebSocket", { status: 426 });
+        } catch (e) {
+          return new Response((e as Error).message, { status: (e as { status?: number }).status ?? 503 });
+        }
+      }
       const noteId = Number(req.params.noteId);
       const [n] = Number.isSafeInteger(noteId) ? await sql`select vault_id from notes where id = ${noteId}` : [];
       if (!n) return new Response("Note not found", { status: 404 });
@@ -199,7 +241,7 @@ const server = Bun.serve<CollabData>({
       } catch {
         return new Response("Note not found", { status: 404 });
       }
-      const data: CollabData = { kind: "collab", noteId, vaultId: n.vault_id, userId: user.id, canWrite: canWrite(role), sessionHash: sessionHash(req) };
+      const data: CollabData = { kind: "collab", noteId, vaultId: n.vault_id, userId: user.id, canWrite: canWrite(role), sessionHash: who.deviceToken ? socketKey(who.deviceToken) : sessionHash(req) };
       if (srv.upgrade(req, { data })) return undefined as unknown as Response;
       return new Response("Expected a WebSocket", { status: 426 });
     },
@@ -208,9 +250,9 @@ const server = Bun.serve<CollabData>({
     "/*": (req: Request, srv: Bun.Server<CollabData>) => appShell(req, srv),
   },
   websocket: {
-    open: (ws) => void onOpen(ws),
-    message: (ws, msg) => onMessage(ws, msg as Buffer),
-    close: (ws) => onClose(ws),
+    open: (ws) => (isProxy(ws) ? socketOpen(ws as any) : void onOpen(ws)),
+    message: (ws, msg) => (isProxy(ws) ? socketMessage(ws as any, msg as Buffer) : onMessage(ws, msg as Buffer)),
+    close: (ws) => (isProxy(ws) ? socketClose(ws as any) : onClose(ws)),
     idleTimeout: 120,
     maxPayloadLength: 16 * 1024 * 1024,
   },
@@ -222,6 +264,11 @@ if (generatedSetupToken) {
 }
 
 const queued = await backfill();
+// The words in PDFs, for search (src/fileText.ts): any not read yet, now and every two minutes,
+// whichever way they arrived (upload, import, GitHub, a folder on the Mac).
+const readPdfs = () => readOldPdfs().catch((e) => console.warn(`reading PDFs: ${(e as Error).message}`));
+void readPdfs();
+setInterval(readPdfs, 2 * 60_000).unref?.();
 console.log(
   `commonplace on http://localhost:${server.port}  (${await dbVersions()}; embeddings: ${settings.embeddingProvider}${queued ? `, ${queued} notes queued` : ""})`,
 );

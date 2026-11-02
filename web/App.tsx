@@ -4,11 +4,13 @@
 // (web/lib/router.ts). It provide()s the app-wide actions to web/lib/commands.ts. VaultHome, at
 // the bottom, is the vault's start page.
 
+import { emptyCanvas, serialiseCanvas } from "../src/canvas";
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { normalisePath } from "../src/markdown";
-import { AiPanel } from "./components/AiPanel";
+import { AiPanel, askInPanel } from "./components/AiPanel";
+import { importDayOne, weekReflection } from "./lib/journal";
 import { AssistantDialogHost, editAssistant } from "./components/AssistantDialog";
-import { CommandPalette } from "./components/CommandPalette";
+import { CommandPalette, findCommands, runCommandSoon } from "./components/CommandPalette";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Graph } from "./components/Graph";
 import { LocalGraph } from "./components/LocalGraph";
@@ -16,13 +18,21 @@ import { graphUrl } from "./lib/graph";
 import { Icon } from "./ui/Icon";
 import { PanelToggle, setFilesBadge } from "./ui/PanelToggle";
 import { chooseDialog, Overlays, promptDialog, toast, toastError } from "./ui/overlays";
+import { RelationshipBuilderHost } from "./components/RelationshipBuilder";
 import { Login } from "./components/Login";
+import { OAuthConsent } from "./components/OAuthConsent";
 import { NoteView } from "./components/NoteView";
 import { QuickSwitcher } from "./components/QuickSwitcher";
 import { RightPanel } from "./components/RightPanel";
 import { PanelResizer, usePanelWidths } from "./ui/PanelResizer";
+import { Tour } from "./ui/Tour";
+import { markSeen, startTour, type TourEnv, useTourOffer } from "./lib/tour";
+import { setHelpTour } from "./lib/help";
+import { isTypePath } from "../src/types";
 import { NewTypeDialog } from "./components/NewTypeDialog";
 import { TasksPage } from "./components/TasksPage";
+import { JournalPage } from "./components/JournalPage";
+import { JournalEntryHost } from "./components/JournalEntry";
 import { BranchBar, filesBadge } from "./components/BranchBar";
 import { ChangesPage } from "./components/ChangesPage";
 import { GitHubVaultDialog } from "./components/GitHubVault";
@@ -33,6 +43,7 @@ import { TypePage } from "./components/TypePage";
 import { loadBookmarks } from "./lib/bookmarks";
 import { loadSavedSearches } from "./lib/savedSearches";
 import { focusModeOn, setFocusMode, useFocusMode } from "./lib/focusMode";
+import { useFullWidth } from "./lib/editorWidth";
 import { usePhoneChrome } from "./lib/phoneChrome";
 import { Sidebar } from "./components/Sidebar";
 import { Trash } from "./components/Trash";
@@ -55,6 +66,15 @@ type Outline = { level: number; text: string; line: number }[];
 
 export function App() {
   const [session, setSession] = useState<Session | null>(null);
+  // Back from signing in to the cloud library (F23, src/remote.ts): say how it went.
+  useEffect(() => {
+    const said = new URLSearchParams(location.search).get("cloud");
+    if (!said) return;
+    history.replaceState(history.state, "", location.pathname);
+    if (said === "connected") toast("Signed in to the cloud library: its collections are in the menu, under In the cloud");
+    else toast(said, { tone: "error" });
+    openSettings("connections");
+  }, []);
   // Before anyone's notes show: if this isn't the person whose offline copies are on this device,
   // those go first (a shared browser, a session that expired; web/lib/offline.ts).
   const loadSession = useCallback(
@@ -72,8 +92,15 @@ export function App() {
   if (!session) return <div className="splash" />;
   return (
     <>
-      {session.user ? <Workspace session={session} reloadSession={loadSession} /> : <Login session={session} onDone={loadSession} />}
+      {!session.user ? (
+        <Login session={session} onDone={loadSession} />
+      ) : location.pathname === "/oauth/authorize" ? (
+        <OAuthConsent session={session} />
+      ) : (
+        <Workspace session={session} reloadSession={loadSession} />
+      )}
       <Overlays />
+      <RelationshipBuilderHost />
     </>
   );
 }
@@ -83,6 +110,7 @@ function Workspace({ session, reloadSession }: { session: Session; reloadSession
   const route = parseRoute(path);
   const narrow = useNarrow();
   const focus = useFocusMode();
+  const fullWidth = useFullWidth();
   // Offline (F4): say so once when the connection goes, and again when it's back.
   const online = useOnline();
   const wasOnline = useRef(online);
@@ -126,6 +154,7 @@ function Workspace({ session, reloadSession }: { session: Session; reloadSession
   // Panels slide only when toggled, never as the page first appears.
   const [ready, setReady] = useState(false);
   const { widths, resize } = usePanelWidths();
+  const [journalSeq, setJournalSeq] = useState(0);
   useEffect(() => {
     const t = setTimeout(() => setReady(true), 500);
     return () => clearTimeout(t);
@@ -146,6 +175,27 @@ function Workspace({ session, reloadSession }: { session: Session; reloadSession
   useEffect(() => {
     void loadVaults();
     void loadAssistants().catch(() => {}); // so @name offers them at the first keystroke
+  }, []);
+
+  // Siri and Shortcuts (L8 step 5) open the app at /find?q=… (a note by its title, in any
+  // collection) or /ask?q=… (the question, sent to the assistant in the side panel).
+  useEffect(() => {
+    const q = new URLSearchParams(location.search).get("q")?.trim();
+    if (!q || (location.pathname !== "/find" && location.pathname !== "/ask")) return;
+    if (location.pathname === "/ask") {
+      askInPanel(q);
+      setRightTab("ai");
+      setRight(true);
+      navigate("/", true);
+      return;
+    }
+    api<{ id: number; vaultId: number; title: string }[]>(`/find?q=${encodeURIComponent(q)}`).then(
+      (hits) => {
+        if (hits[0]) navigate(noteUrl(hits[0].vaultId, hits[0].id), true);
+        else (toast(`No note called “${q}”`), navigate("/", true));
+      },
+      (e) => (toastError(e), navigate("/", true)),
+    );
   }, []);
 
   // "/" → the last collection used, else your home one, else the first.
@@ -204,7 +254,12 @@ function Workspace({ session, reloadSession }: { session: Session; reloadSession
     void loadNotes();
     let timer: Timer | undefined;
     const es = new EventSource(`/api/vaults/${vaultId}/events`);
-    es.onmessage = () => {
+    es.onmessage = (m) => {
+      // Comments (L3) change nothing in the file list: tell the open note and side panel instead.
+      try {
+        const e = JSON.parse(m.data) as { type?: string; noteId?: number };
+        if (e.type === "comments.changed") return void window.dispatchEvent(new CustomEvent("cp:comments", { detail: e.noteId }));
+      } catch {}
       clearTimeout(timer);
       timer = setTimeout(() => void loadNotes(true), 400);
     };
@@ -243,6 +298,13 @@ function Workspace({ session, reloadSession }: { session: Session; reloadSession
     },
     [vaultId, narrow],
   );
+
+  // A board (F11): a .canvas note, named first since it starts empty.
+  const newBoard = async () => {
+    const name = await promptDialog({ title: "New board", label: "Name", placeholder: "Ideas", action: "Create" });
+    if (!name) return;
+    void createNote(`${name.replace(/\.canvas$/i, "")}.canvas`, serialiseCanvas(emptyCanvas()));
+  };
 
   const newNote = (folder?: string) => {
     const base = folder ? `${folder}/Untitled` : "Untitled";
@@ -404,6 +466,33 @@ function Workspace({ session, reloadSession }: { session: Session; reloadSession
     return () => window.removeEventListener("keydown", on);
   });
 
+  // The guided tour (web/lib/tour.ts) opens a note and the panels as it goes, without
+  // remembering them as your choice, and puts the panels back when it ends.
+  const tourNow = useRef({ notes, route, vault });
+  tourNow.current = { notes, route, vault };
+  const tourEnv = (): TourEnv => {
+    const was = { left: leftOpen, right: rightOpen };
+    return {
+      narrow,
+      async openRecentNote() {
+        const { notes, route, vault } = tourNow.current;
+        if (route.page === "note" && route.noteId) return true;
+        const n = [...notes].filter((x) => !isTypePath(x.path)).sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
+        if (!n || !vault) return false;
+        navigate(noteUrl(vault.id, n.id));
+        if (narrow) (setLeftOpen(false), setRightOpen(false));
+        return true;
+      },
+      showLeft: (open) => setLeftOpen(open),
+      showRight: (open) => {
+        if (open) setRightTabState("links");
+        setRightOpen(open);
+      },
+      home: () => tourNow.current.vault && navigate(`/v/${tourNow.current.vault.id}`),
+      finish: () => (setLeftOpen(narrow ? false : was.left), setRightOpen(narrow ? false : was.right)),
+    };
+  };
+
   const setLeft = (open: boolean) => {
     setLeftOpen(open);
     if (!narrow) localStorage.setItem("cp:left", open ? "1" : "0");
@@ -423,6 +512,20 @@ function Workspace({ session, reloadSession }: { session: Session; reloadSession
     if (rightOpen && (rightTab === "ai" || route.page !== "note")) return setRight(false);
     setRightTab("ai");
     setRight(true);
+  };
+  // F24: the week's journal, from the home collection, handed to the assistant in the side panel.
+  const reflect = async () => {
+    const home = vaults?.find((v) => v.home) ?? vault;
+    if (!home) return;
+    try {
+      const text = await weekReflection(home.id);
+      if (!text) return void toast(`No journal entries in ${home.name} in the last seven days`);
+      askInPanel(text);
+      setRightTab("ai");
+      setRight(true);
+    } catch (e) {
+      toastError(e);
+    }
   };
   const openNoteByName = (target: string): string | null => {
     const hit = vaultId ? resolveLocal(notes, target.replace(/^\[\[|\]\]$/g, "")) : null;
@@ -447,6 +550,7 @@ function Workspace({ session, reloadSession }: { session: Session; reloadSession
 
   // App-wide actions for the command list (web/lib/commands.ts), refreshed every render.
   useEffect(() => {
+    setHelpTour(vault ? { tour: () => startTour("full", tourEnv()), whatsNew: () => startTour("new", tourEnv()) } : null);
     if (!vault) return provide("app", null);
     provide("app", {
       canWrite,
@@ -455,12 +559,14 @@ function Workspace({ session, reloadSession }: { session: Session; reloadSession
       graph: () => (navigate(`/v/${vault.id}/graph`), onNoteViewNav()),
       graphHere: noteId ? () => (navigate(graphUrl(vault.id, { note: noteId })), onNoteViewNav()) : null,
       tasks: () => (navigate(`/v/${vault.id}/tasks`), onNoteViewNav()),
+      journal: () => (navigate(`/v/${vault.id}/journal`), onNoteViewNav()),
       home: () => navigate(`/v/${vault.id}`),
       today: () => void daily(),
       newNote: () => newNote(),
       newFromTemplate: () => void newFromTemplate(),
       newTyped: (t) => void newTyped(t),
       newType: () => void newType(),
+      newBoard: () => void newBoard(),
       saveLink: () => void saveLink(),
       isAdmin: !!session.user!.is_admin,
       trash: () => setTrash(true),
@@ -468,8 +574,13 @@ function Workspace({ session, reloadSession }: { session: Session; reloadSession
       toggleRight,
       openNote: openNoteByName,
       askAi,
+      importDayOne: () => void importDayOne(vault).then((done) => done && (navigate(`/v/${vault.id}/journal`), onNoteViewNav())),
+      reflect: () => void reflect(),
       addAssistant: () => void editAssistant(),
       exportHref: `/api/vaults/${vault.id}/export`,
+      vaultId: vault.id,
+      folders: !!session.folders,
+      tour: (kind) => startTour(kind, tourEnv()),
       newGitVault: () => setGhDialog(true),
       git: git
         ? {
@@ -510,7 +621,7 @@ function Workspace({ session, reloadSession }: { session: Session; reloadSession
   const showRight = rightOpen && (onNote || tabShown === "ai");
 
   return (
-    <div className={`app${focus && onNote ? " focus-mode" : ""}${online ? "" : " offline"}${ready ? " ready" : ""}${leftOpen ? " left-open" : ""}${showRight ? " right-open" : ""}${tabShown === "ai" ? " right-ai" : ""}${phoneChrome.hidden ? " chrome-hidden" : ""}${phoneChrome.typing ? " typing" : ""}`}
+    <div className={`app${focus && onNote ? " focus-mode" : ""}${fullWidth ? " full-width" : ""}${online ? "" : " offline"}${ready ? " ready" : ""}${leftOpen ? " left-open" : ""}${showRight ? " right-open" : ""}${tabShown === "ai" ? " right-ai" : ""}${phoneChrome.hidden ? " chrome-hidden" : ""}${phoneChrome.typing ? " typing" : ""}`}
       style={narrow ? undefined : ({ "--sidebar-w": `${widths.left}px`, "--right-w": `${widths.right}px` } as CSSProperties)}
     >
       <Sidebar
@@ -550,6 +661,7 @@ function Workspace({ session, reloadSession }: { session: Session; reloadSession
             noteId={noteId}
             user={session.user!}
             instance={session.instance}
+            cloud={!!vault.cloud}
             notes={notes}
             tags={tagNames}
             folders={folderList}
@@ -577,6 +689,9 @@ function Workspace({ session, reloadSession }: { session: Session; reloadSession
         )}
         {route.page === "tasks" && (
           <TasksPage vault={vault} notes={notes} leftOpen={leftOpen} onToggleLeft={toggleLeft} rightOpen={showRight} onToggleRight={toggleRight} onNavigate={onNoteViewNav} />
+        )}
+        {route.page === "journal" && (
+          <JournalPage vault={vault} notes={notes} leftOpen={leftOpen} onToggleLeft={toggleLeft} rightOpen={showRight} onToggleRight={toggleRight} onNavigate={onNoteViewNav} onDaily={(d) => void daily(d)} seq={journalSeq} />
         )}
         {route.page === "changes" && (
           <ChangesPage vault={vault} notes={notes} leftOpen={leftOpen} onToggleLeft={toggleLeft} rightOpen={showRight} onToggleRight={toggleRight} onNavigate={onNoteViewNav} onPullRequest={() => setPrDialog(true)} />
@@ -606,6 +721,7 @@ function Workspace({ session, reloadSession }: { session: Session; reloadSession
             onNewFromTemplate={templatesIn(notes).length ? () => void newFromTemplate() : undefined}
             onDaily={() => void daily()}
             onImport={() => openSettings("vault")}
+            onGuidedTour={(kind) => startTour(kind, tourEnv())}
             onTour={() =>
               api<{ id: number }>(`/vaults/${vault.id}/tour`, { body: {} })
                 .then(async (r) => (await loadNotes(), navigate(noteUrl(vault.id, r.id))))
@@ -665,6 +781,7 @@ function Workspace({ session, reloadSession }: { session: Session; reloadSession
         {tabShown === "ai" && showRight && <AiPanel vaultId={vault.id} noteId={onNote ? noteId : null} notes={notes} you={session.user!.name} onOpenLink={openLink} />}
       </aside>
 
+      <Tour />
       {narrow && (
         <button className="fab" onClick={() => setSwitcher(true)} aria-label="Find a note">
           <Icon name="search" size={22} />
@@ -676,6 +793,7 @@ function Workspace({ session, reloadSession }: { session: Session; reloadSession
         <QuickSwitcher
           notes={notes}
           canCreate={canWrite}
+          findCommands={(q) => findCommands(q).map((c) => ({ id: c.id, title: c.title, icon: c.icon, run: () => runCommandSoon(c) }))}
           onPick={(n) => {
             setSwitcher(false);
             navigate(noteUrl(vault.id, n.id));
@@ -717,6 +835,13 @@ function Workspace({ session, reloadSession }: { session: Session; reloadSession
       {prDialog && git && <PullRequestDialog vaultId={vault.id} status={git} user={session.user!} onClose={() => setPrDialog(false)} />}
       {ghDialog && <GitHubVaultDialog onClose={() => setGhDialog(false)} onCreated={() => loadVaults()} />}
       {/* After the dialogs that open it, and before the one it opens, so each is on top */}
+      <JournalEntryHost
+        homeName={vaults.find((v) => v.home)?.name ?? null}
+        onAdded={(v) => {
+          setJournalSeq((n) => n + 1);
+          if (v === vaultId) void loadNotes();
+        }}
+      />
       <HelpHost />
       <SettingsHost
         vault={vault}
@@ -733,7 +858,36 @@ function Workspace({ session, reloadSession }: { session: Session; reloadSession
   );
 }
 
-function VaultHome({ vault, notes, folderCount, loaded, onSwitcher, onCommands, onNew, onNewFromTemplate, onDaily, onImport, onTour, leftOpen, onToggleLeft, rightOpen, onToggleRight }: { vault: Vault; notes: NoteSummary[]; folderCount: number; loaded: boolean; onSwitcher: () => void; onCommands: () => void; onNew: () => void; onNewFromTemplate?: () => void; onDaily: () => void; onImport: () => void; onTour: () => void; leftOpen: boolean; onToggleLeft: () => void; rightOpen: boolean; onToggleRight: () => void }) {
+/** The guided tour's offer, at the top of the home page: once, then after each release. */
+function TourOffer({ onTour }: { onTour: (kind: "full" | "new") => void }) {
+  const narrow = useNarrow();
+  const offer = useTourOffer(narrow);
+  if (!offer) return null;
+  return (
+    <div className="tour-offer-card" role="region" aria-label={offer === "tour" ? "Tour" : "What's new"}>
+      <Icon name={offer === "tour" ? "lightbulb" : "sparkle"} />
+      <p>
+        {offer === "tour" ? (
+          <>
+            <b>New here?</b> A one-minute tour of the screen, pointing at each part as it goes.
+          </>
+        ) : (
+          <>
+            <b>New in DO Notes.</b> A quick look at what's been added since you last looked.
+          </>
+        )}
+      </p>
+      <button className="quiet" onClick={markSeen}>
+        Not now
+      </button>
+      <button className="primary" onClick={() => onTour(offer === "tour" ? "full" : "new")}>
+        {offer === "tour" ? "Take the tour" : "Show me"}
+      </button>
+    </div>
+  );
+}
+
+function VaultHome({ vault, notes, folderCount, loaded, onSwitcher, onCommands, onNew, onNewFromTemplate, onDaily, onImport, onTour, onGuidedTour, leftOpen, onToggleLeft, rightOpen, onToggleRight }: { vault: Vault; notes: NoteSummary[]; folderCount: number; loaded: boolean; onSwitcher: () => void; onCommands: () => void; onNew: () => void; onNewFromTemplate?: () => void; onDaily: () => void; onImport: () => void; onTour: () => void; onGuidedTour: (kind: "full" | "new") => void; leftOpen: boolean; onToggleLeft: () => void; rightOpen: boolean; onToggleRight: () => void }) {
   const recent = [...notes].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 12);
   const canWrite = vault.role !== "viewer";
   return (
@@ -746,6 +900,7 @@ function VaultHome({ vault, notes, folderCount, loaded, onSwitcher, onCommands, 
         </div>
       </header>
       <div className="vault-home-body">
+        <TourOffer onTour={onGuidedTour} />
         <div className="quick-actions">
           <button onClick={onSwitcher}>
             <Icon name="search" /> Find a note <kbd>⌘O</kbd>
@@ -805,7 +960,7 @@ function VaultHome({ vault, notes, folderCount, loaded, onSwitcher, onCommands, 
             {canWrite && (
               <div className="tour-offer">
                 <p>
-                  <b>New to Commonplace?</b> A short tour: five notes that show how it works by being used. Delete them when you're done.
+                  <b>New to DO Notes?</b> A short tour: five notes that show how it works by being used. Delete them when you're done.
                 </p>
                 <button className="primary" onClick={onTour}>
                   <Icon name="book" /> Add a short tour

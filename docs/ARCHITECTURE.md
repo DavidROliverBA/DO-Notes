@@ -64,7 +64,7 @@ flowchart LR
   subgraph People
     B["Browser / home-screen app<br/>(laptop, iPhone)"]
     S["iPhone Shortcut<br/>(share sheet)"]
-    A["AI agents over MCP<br/>(Claude Code, …)"]
+    A["AI agents over MCP<br/>(claude.ai, Claude Code, …)"]
     R["Readers of a<br/>published site"]
   end
 
@@ -81,7 +81,7 @@ flowchart LR
 
   B -- "cookie session" --> API
   S -- "bearer capture token" --> API
-  A -- "bearer MCP token" --> API
+  A -- "bearer MCP token<br/>(pasted, or from OAuth sign-in)" --> API
   R -- "no auth, read-only" --> API
   BK -- "bearer BACKUP_TOKEN" --> API
   API --> DB
@@ -97,7 +97,7 @@ Each kind of client authenticates differently, and none of them ever puts a cred
 |---|---|---|
 | Browser | Session cookie (`HttpOnly`, `SameSite=Lax`), same-origin check on writes and socket upgrades | The vaults the person belongs to, with their role in each |
 | iPhone Shortcut | `Authorization: Bearer cpc_…` capture token | Append to one inbox note in one vault (or in the person's home vault, `users.home_vault_id`, when the token names none), nothing else |
-| MCP agent | `Authorization: Bearer cpm_…` MCP token, read-only or read-write | The tools in `src/tools.ts`, as the person, with their roles |
+| MCP agent | `Authorization: Bearer cpm_…` MCP token, read-only or read-write: pasted from Settings, or issued by OAuth sign-in (`oauth.ts`; an hour, then refreshed) | The tools in `src/tools.ts`, as the person, with their roles |
 | Backup job | `Authorization: Bearer $BACKUP_TOKEN` | `GET /api/backup` only |
 | Site reader | None | The published snapshot at `/p/<slug>/` only |
 
@@ -141,6 +141,9 @@ flowchart TB
   the `commonplace-laptop-data` volume) and `laptop/commonplace.sh`, which makes the `SECRETS_KEY`,
   shows the setup token, backs up with `pg_dump`, restores, resets a password
   (`scripts/reset-password.ts`) and packages both images into one file for an offline install.
+  It also mounts `COMMONPLACE_FOLDERS` (`~/Commonplace` by default) at `/folders` as
+  `FOLDERS_ROOT`, for collections kept in a folder of Markdown (F22, §7.8). That folder is the
+  only place the server writes files.
 
 Configuration comes only from environment variables (`src/settings.ts`, documented in
 `.env.example`). No secret is ever committed.
@@ -155,13 +158,17 @@ All server code is in `src/`. Most modules are small and own one concern.
 | **Identity** | `auth.ts`, `tokens.ts`, `vaults.ts` | Accounts (argon2id), server-side sessions, bearer tokens (stored hashed, with scopes), vault membership, invitations (accepted before they grant anything) and roles (`owner`, `editor`, `viewer`). |
 | **Graph** | `graph.ts` | Every note with its type, tags, daily flag and date for the timeline (`noteWhen`: a daily note's day, a date property, its type's, or when it was made), every resolved link, labelled with the property it came from (worked out from frontmatter at request time), and the types' icons and colours. Scopes, filters, neighbourhoods and the timeline's range are worked out in the browser (`web/lib/graph.ts`). |
 | **Notes core** | `notes.ts`, `markdown.ts`, `props.ts`, `ydoc.ts` | Create, read, update and delete notes. `persist()` re-derives the index in the same transaction. Also revisions, Trash and link resolution. `markdown.ts` is pure and shared with the browser. |
-| **Live editing** | `collab.ts`, `events.ts` | Yjs rooms over the standard y-websocket protocol, with awareness (cursors). Debounced persistence. A vault-level event bus streamed to browsers over SSE. |
+| **Boards** (F11) | `canvas.ts`, `boards.ts`, `web/components/Board.tsx`, `web/lib/boardLayout.ts` | A `.canvas` (JSON Canvas) is a note whose live document holds cards and arrows as Y.Maps instead of text (§7.10). `canvas.ts` is shared with the browser; `boards.ts` answers "which boards is this note on, and which arrows reach it". Drawn with React Flow. |
+| **AI-XF** (F9) | `aixf.ts`, `aixfImport.ts`, `aixfId.ts`, `aixfCanon.ts` | Ids (`id:` in a note's properties, made once from its title), and a collection or folder out as an AI-XF bundle and back in (§7.11). `aixfCanon.ts` is the canonical form, vendored from Longview; `tools/ai-xf-validate.py` is the reference validator the tests run. |
+| **Live editing** | `collab.ts`, `events.ts` | Yjs rooms over the standard y-websocket protocol, with awareness (cursors). Debounced persistence; a write from outside the editor (`overwriteContent`) is saved at once, so it reads back straight away. A vault-level event bus streamed to browsers over SSE. |
 | **Search** | `search.ts`, `embed.ts` | Full-text search (title-weighted), trigram title search and pgvector similarity over heading-sized chunks, fused with Reciprocal Rank Fusion. Embedding runs in a debounced in-process queue. |
-| **Structure** | `types.ts`, `typeIndex.ts`, `vaultViews.ts`, `tour.ts` | Types defined as notes in `Types/`, type pages and relations, tasks across the vault, unlinked mentions, bookmarks, and the first-run tour. |
+| **Structure** | `types.ts`, `typeIndex.ts`, `relationships.ts`, `relationshipIndex.ts`, `vaultViews.ts`, `tour.ts` | Types defined as notes in `Types/`, type pages and relations, the kinds of relationship (a collection's own, in its `Relationships.md` table, then its types' relations, then AI-XF's core kinds) and a note's relationships both ways for the side panel (`relationsFrom`, `backlinksWithProperty`; changed in the browser by `web/lib/relations.ts`), tasks across the vault, unlinked mentions, bookmarks, and the first-run tour. |
 | **Between vaults** | `between.ts` | Copy or move notes or a folder to another vault, with embedded files and missing type notes; a move carries history and sends the originals to Trash. Used by `POST /send` and the `copy_to_vault` tool. |
 | **Import / export** | `transfer.ts` | Import a zip or folder of Markdown files, export a vault or a note, and the streamed backup zip. Limits on size and entry counts guard against zip bombs. |
-| **Capture** | `capture.ts`, `weblinks.ts`, `images.ts`, `imageWorker.ts`, `imageMath.ts` | The iPhone share target. Weblink notes come from an SSRF-guarded fetch, and photos are converted (HEIC to JPEG, shrunk, upright) in a child process. |
-| **AI** | `ai.ts`, `llm.ts`, `tools.ts`, `mcp.ts`, `assistants.ts`, `prices.ts`, `secrets.ts`, `web.ts` | Each tool is defined once in `tools.ts` (the web tools, in-app only, in `web.ts`). `mcp.ts` serves the tools to agents over MCP. `ai.ts` runs them in-process for the in-app assistant. `llm.ts` translates to each provider's format. `assistants.ts` holds sealed keys and daily £ limits. |
+| **Capture** | `capture.ts`, `weblinks.ts`, `images.ts`, `imageWorker.ts`, `imageMath.ts` | The iPhone share target. Weblink notes, and link cards for a web address on its own line (F28, `/linkcard`, cached a day in memory), come from an SSRF-guarded fetch, and photos are converted (HEIC to JPEG, shrunk, upright) in a child process. |
+| **Journal** (F24) | `journal.ts`, `web/lib/journal.ts`, `JournalPage.tsx`, `JournalEntry.tsx` | Entries go into a day's daily note under `## Journal` as `### HH:MM`, in the person's home collection. The journal page and On this day read those sections back. Publish strips them (`stripHidden`), and `add_journal_entry` is a write tool with a preview. |
+| **AI** | `ai.ts`, `llm.ts`, `tools.ts`, `mcp.ts`, `oauth.ts`, `assistants.ts`, `prices.ts`, `secrets.ts`, `web.ts`, `connections.ts`, `outside.ts`, `presets.ts`, `mcpClient.ts` | Each tool is defined once in `tools.ts` (the web tools, in-app only, in `web.ts`; connected services' tools, in-app only, from `connections.ts` through `outside.ts`). `mcp.ts` serves the tools to agents over MCP; `oauth.ts` lets apps such as claude.ai sign in to it. `ai.ts` runs them in-process for the in-app assistant. `llm.ts` translates to each provider's format. `assistants.ts` holds sealed keys and daily £ limits. |
+| **Folder vaults** | `folderSync.ts`, `syncCore.ts` | On the Mac (F22): keep a vault in step with a folder under `FOLDERS_ROOT`, both ways, with merges and held clashes; file events plus a periodic rescan. `syncCore.ts` holds the file helpers it shares with GitHub vaults. |
 | **GitHub vaults** | `git.ts`, `github.ts`, `merge3.ts`, `gitAuto.ts`, `schedule.ts` | Copy in, track changes, push and open a PR, update from the base with a three-way merge, and cancel; send on a schedule, once idle, or straight to a branch (F19). Uses the REST API only. |
 | **Publishing** | `publish.ts` | Renders a snapshot of the chosen notes to HTML in `site_pages` and `site_files`, then serves `/p/<slug>/` from that snapshot. |
 | **Guards** | `storage.ts`, `settings.ts` | The disk guard (warns at 80%, refuses new data at 90%; typing is never refused) and the environment settings. |
@@ -184,7 +191,7 @@ framework beyond that.
 |---|---|---|
 | **Shell** | `App.tsx`, `main.tsx`, `lib/router.ts` | Signed-in state, the open vault and note, client routing, layout (sidebar, note, right panel), the event-stream subscription. |
 | **Screens** | `components/` | One file per screen or panel: `NoteView` and `Editor`, `Sidebar`, `Settings` and its sections, `TypePage`, `TasksPage`, `Graph` (with `GraphCanvas`, shared with the side panel's `LocalGraph`, and `GraphTimeline`), `AiChat`, `ChangesPage`, and so on. |
-| **Editor extensions** | `lib/livePreview.ts`, `lib/propertiesWidget.ts`, `lib/tableWidget.ts`, `lib/blockHandle.ts`, `lib/blocks.ts`, `lib/embeds.ts`, `lib/colours.ts` | Live Preview built as CodeMirror decorations and widgets. Blocks are worked out from the syntax tree and never stored. |
+| **Editor extensions** | `lib/livePreview.ts`, `lib/propertiesWidget.ts`, `lib/tableWidget.ts`, `lib/blockHandle.ts`, `lib/blocks.ts`, `lib/embeds.ts`, `lib/colours.ts`, `lib/places.ts`, `src/codeHighlight.ts` | Live Preview built as CodeMirror decorations and widgets. Blocks are worked out from the syntax tree and never stored. Code is coloured by the same lezer parsers in the editor, reading view and published pages (`tok-*` classes). |
 | **Shared logic** | `lib/commands.ts`, `lib/links.ts`, `lib/render.ts`, `lib/frontmatter.ts`, `lib/offline.ts`, … | The single command registry (⌘K, the ⋯ menu and the `/` menu all read it), link resolution that mirrors the server, sanitised rendering (DOMPurify), surgical frontmatter edits, and the offline store. |
 | **Design system** | `ui/`, `styles/` | `Modal`, `Menu` (a popover on a laptop, an action sheet on a phone), the app's own confirm, prompt and toasts (`overlays.tsx`), and icons. Every colour, size, radius and duration is a token in `styles/tokens.css`, with one stylesheet per area. `test/design.test.ts` enforces both. |
 | **Offline** | `sw.js`, `lib/offline.ts` | A network-first service worker that caches the app shell and a short allow-list of reads. Each opened note's Yjs state is kept in IndexedDB. |
@@ -193,9 +200,11 @@ The browser and server share `src/markdown.ts`, `src/types.ts` and `src/prices.t
 wikilink, a type or a price means the same thing on both sides.
 
 **The standalone version** (`standalone/`) is the same client built into one HTML file that edits
-a folder of Markdown files with no server. Its build swaps `web/lib/api.ts` for a stand-in that
-reads the open folder, and reuses Live Preview, the renderer, embeds, dialogs and stylesheets as
-they are. Chrome and Edge write changes back through the File System Access API; other browsers
+folders of Markdown files (several at once, each a collection) with no server. Its build swaps
+`web/lib/api.ts` for a stand-in that answers from the open folders (notes, Dataview, the graph,
+tasks, bookmarks, saved searches, pictures), and reuses the editor, the command list (limited by
+`offerOnly`), the Graph and Tasks pages, dialogs and stylesheets as they are; the router keeps its
+paths in memory. Chrome and Edge write changes back through the File System Access API; other browsers
 keep edits in the tab and download them as a zip. See `standalone/README.md`.
 
 **Help** (`docs/help/*.md`, `web/lib/help.ts`, `web/components/Help.tsx`): the user guide is
@@ -260,6 +269,8 @@ core of it:
 ```mermaid
 erDiagram
   users ||--o{ sessions : "signs in with"
+  users ||--o{ passkeys : "Face ID, Touch ID"
+  users ||--o{ recovery_codes : "two-step (F40)"
   users ||--o{ vault_members : ""
   vaults ||--o{ vault_members : "has"
   vaults ||--o{ vault_invites : "pending, by email"
@@ -271,6 +282,8 @@ erDiagram
   notes ||--o{ note_revisions : "history"
   vaults ||--o{ trashed_notes : "Trash, 30 days"
   users ||--o{ api_tokens : "bearer tokens (hashed)"
+  oauth_clients ||--o{ api_tokens : "MCP sign-ins"
+  oauth_clients ||--o{ oauth_codes : "five-minute codes"
   users ||--o{ user_assistants : "AI keys (sealed)"
   user_assistants ||--o{ ai_usage : "daily £ ledger"
   vaults ||--o| vault_git : "GitHub link"
@@ -407,6 +420,30 @@ search, so once a conversation has made a web request, every further one is a pe
 shows the exact search or address, and every change asks, even to the open note. A link that a
 search returned opens without asking, since Brave chose that address, not the model.
 
+**Connections** (F30, F33: `connections.ts`, `outside.ts`, `presets.ts`; design in
+`docs/design/F33.md`) are each person's read-only connections to MCP services, offered to the
+in-app assistant only (never in `tools.ts`, so never over MCP). `mcpClient.ts` is a small
+Streamable HTTP client (JSON or event-stream answers, paged tool lists) whose every request goes
+through `egress.ts`, with the token only in the `Authorization` header. A connection
+(`connections`) signs in with a token or with OAuth (discovery, registration in
+`outside_oauth_clients`, PKCE, the service's read scopes only; the state ties the callback to the
+person, so it works in a browser with no session); tokens are sealed and refreshed as they
+expire. Its tools (`connection_tools`) are sorted read / unknown / changes, by the preset when
+there is one (Longview and Recall, reviewed in `presets.ts`), else by their annotations; a tool
+that changes things is never enabled, and an unknown one asks before every call. Each tool's
+hash is kept with the one the person reviewed: when a chosen tool changes, the connection is
+held (`status = 'review'`) and offers nothing until the person looks again. Tool lists are
+fetched again every five minutes. Calls follow the web's rule: a call whose every text input the
+person typed, or an earlier answer from the same connection gave, runs; any other asks; after
+one, every change asks.
+
+**Send to Longview** (F30 step 4, `sendLongview.ts`) is the one write to a connected service,
+and it isn't the assistant's: the person's command on a Weblink note calls Longview's `save_url`
+with the note's `url` (http or https only) and the reason they typed, never the note. It uses a
+second token (`connections.send_enc`, sealed), checked to offer `save_url` when added, beside
+the read connection, which still refuses any token that can change Longview; disconnecting
+Longview drops both.
+
 ### 7.5 GitHub vaults
 
 A vault can be a copy of a repository, or of one folder in it. The workflow is a branch and a
@@ -473,21 +510,179 @@ the token's inbox note, through `overwriteContent`:
 - A photo is converted in a child process, which returns the decoder's memory to the system
   when it exits.
 
+### 7.8 Folder vaults on the Mac
+
+Only where `FOLDERS_ROOT` is set and writable (the laptop kit; never the cloud). A vault linked
+to a folder (`vault_folder`: root under `FOLDERS_ROOT`, mode `folder` or `both`) is kept in step
+with it by `folderSync.ts`:
+
+1. **Base.** `folder_files` records each file as both sides last agreed: its md5 on disk and
+   as stored here (they differ when a file has a BOM or CRLF endings), its mtime and size (so a
+   scan reads only files that changed), and a note's text, for merges.
+2. **A pass** compares disk, database and base. Changed on one side only: copied across (into
+   the vault through `createNote` / `overwriteContent` with reason `folder`, one version per
+   burst; out to disk by writing a hidden temp file and renaming it). A file gone from one name
+   and present under another with the same hash is a move (`renameNote` without rewriting links,
+   or `fs.rename`). Deleted on disk: to Trash. Deleted here: the file moves to `<root>/.trash/`.
+3. **Both changed:** `merge3`; when that fails, `folder` mode takes the folder's text (this
+   side's stays in history) and `both` mode holds the note in `folder_clashes` until someone
+   picks a side. Never conflict markers.
+4. **When.** `fs.watch` (a hint: Docker mounts don't always pass events on), the vault's own
+   events (debounced), and a rescan of every vault each `FOLDER_SCAN_MS`. One pass at a time per
+   vault. Notes with open editors are flushed before comparing, and flushed again after a write
+   into their live room, so the next pass never reads a stale save.
+5. **Safety.** Roots are resolved with `realpath` and must sit inside `FOLDERS_ROOT`; roots of
+   two vaults can't overlap; symlinks, dot-folders and `node_modules` are skipped; a link needs
+   one side empty; a root that vanishes or turns up empty pauses the vault instead of trashing it.
+
+### 7.9 The cloud library on the Mac
+
+Only where `CLOUD_LINK` is set (the laptop kit). The Mac's server signs in to the person's cloud
+server and stands between it and the browser, which only ever talks to the Mac (`remote.ts`):
+
+1. **Sign in.** Settings → Connections → Cloud library: the Mac registers itself with the
+   cloud's OAuth server (a loopback redirect to `/api/cloud/callback`), sends the person there to
+   allow the `device` scope, and swaps the code for a `cpd_` token pair, sealed with
+   `SECRETS_KEY` in `remote_links`. The access token is refreshed before it expires, one refresh
+   at a time (refresh tokens rotate).
+2. **The menu.** `GET /api/vaults` adds the cloud's collections under ids drawn from the vaults
+   sequence (`remote_vaults`), so they never collide with the Mac's and have no `vaults` row:
+   MCP, the in-app AI, backups and embeddings never see them. The last list is kept for when the
+   cloud can't be reached.
+3. **Requests.** `route()` forwards any `/api/vaults/:v/…` whose `:v` is a cloud id, to the
+   cloud's id, on an allowlist (notes, files, search, events and the rest; not publishing,
+   GitHub, imports, invitations, members' changes or renaming). Cookies and `Origin` stay on the
+   Mac; the token goes in the header, to an address vetted by `egress.ts`. A cloud that can't be
+   reached answers 503 with `X-Cloud-Unreachable`, which the service worker treats as offline.
+4. **Live editing.** The editor's socket carries `?v=`; for a cloud id the Mac opens the cloud's
+   socket with the device token and relays frames both ways, untouched (the y-websocket protocol
+   is end to end). A socket can't be pinned to an address, so the name is vetted just before
+   connecting. Offline copies of cloud notes are named with their collection, under the same
+   owner, since their ids are the cloud's.
+
+### 7.10 Boards
+
+A board is a `notes` row whose path ends `.canvas` (`isCanvasPath`), so it has a room, offline
+copies, versions, Trash, events and the Move/Copy, folder, GitHub and Mac↔cloud paths of any note
+(`isNotePath` counts it; `normalisePath` keeps its extension). Its `content` is always the JSON
+Canvas text; its Yjs document holds the structure (`canvas.ts`):
+
+- `nodes` and `edges` (Y.Maps by id) of Y.Maps holding every field the file had, unknown ones
+  included, plus `z` for the drawing order (JSON Canvas's array order); a text card's `text` is a
+  Y.Text. Two people moving different cards change different maps, so both moves stay.
+- `loadDoc`, `docContent`, `applyContent` and `rebaseStoredDoc` (`ydoc.ts`) take a `board` flag.
+  A write from outside (the folder, GitHub, REST, a restore) is parsed and patched in by id
+  (`applyCanvasDiff`), never rebuilt, for the same reason text is diffed. Text that isn't JSON
+  Canvas is refused (400), except on import, which keeps a broken file as it is.
+- The room keeps the text it last read or saved, and `docContent` returns it unchanged while the
+  cards are the same, so a file from another editor round-trips byte for byte; changed boards are
+  written in Obsidian's layout (tab indent, one card per line), so they diff cleanly.
+- `derive()` gives a board no tags or properties; its links are its note and board cards and the
+  `[[links]]` in its text cards (`canvasLinks`). So a note's backlinks find the boards it's on,
+  which the links route lists separately, with the arrows to and from it (`boards.ts`).
+  `[[Board.canvas]]` links to a board; `[[Board]]` doesn't. Embeddings index a board's words
+  (`canvasText`), not its JSON. Agents' tools read a board's JSON and refuse writes that would
+  leave it invalid.
+- Before boards were notes, `.canvas` files were kept as attachments; `adoptCanvasFiles()` moves
+  any left there into `notes` at boot, unchanged.
+
+### 7.11 AI-XF bundles
+
+AI-XF (spec v0.5) is Markdown with YAML frontmatter, so a note is nearly a concept already.
+
+- **Ids.** In every collection unless it's turned off (`vaults.aixf_ids`; new collections take
+  `AIXF_IDS`, which the tests set false), a note gets `id:` (kebab case from its title, unique in the collection,
+  `aixfId.ts`) when someone makes it in the app or through an agent (`withNewId`), or, if it's
+  still "Untitled", when it's first named. Daily notes, type notes, boards and files arriving from
+  a folder, GitHub or an import are left as they are. The app keeps `id` out of sight: the
+  properties panel and reading view skip it, and a properties block holding only an id isn't
+  drawn. Ids are never regenerated: renames don't touch frontmatter, and a copy to
+  another collection keeps its id unless it's taken there (`keepIdIn`). Before a bundle,
+  `assignIds` gives the rest one (`overwriteContent`, reason `aixf`, one version per burst).
+- **Out** (`exportBundle`). Each `.md` is written in canonical form (export only; stored notes are
+  never reordered): `type` (or `Note`, or `Type` for a type note), `id`, `title`; every relation
+  property (values all `[[links]]`) becomes a typed link with the property's name as its `rel`,
+  and is mirrored as a body link under `## Related` (§6.4); a property AI-XF gives another meaning
+  (`status`) goes under `commonplace:`; `provenance: {source: primary}` unless the note has its
+  own trust keys; `verified` is never invented. Boards, pictures and other files go as files.
+  The manifest (namespace from the collection's own `manifest.ai-xf.yaml`, made on first export),
+  `vocab/types.json` and `vocab/rels.json` (inverses for AI-XF's core rels, and the collection's own kinds with both names) make it Level 3.
+- **In** (`readBundle`, called from `importFiles` when the zip has a manifest). Keys are kept
+  verbatim; typed links become relation properties (`to` by id, alias or path inside the bundle;
+  `namespace/id` stays a link to that name); `links` is removed when every entry became a
+  property, and kept otherwise; `commonplace:` keys come back; the `## Related` mirror is dropped;
+  missing types get a type note. The collection keeps the bundle's manifest if it has none.
+
+### 7.12 The iPhone app
+
+`ios/` is a small native Swift app (XcodeGen spec `ios/project.yml`; the Xcode project is
+generated and not kept). It doesn't reimplement anything: the app is the web client in a
+`WKWebView`, and the share extension is a client of `/api/capture` (§7.7).
+
+- **Built for one server** (`ios/Config/*.xcconfig`: the laptop kit for Debug, the live service
+  for Release). That domain is the app's **app-bound domain** (`WKAppBoundDomains`), which is
+  what lets the service worker run in a web view, so the app opens offline as the home-screen
+  app does. Other sites open in `SFSafariViewController`; downloads go to the share sheet.
+- **One sign-in, the web's own.** The web view's persistent data store keeps the session cookie.
+  The app watches its cookie store (`TokenKeeper`): when someone is signed in and the app has no
+  live token, it makes a capture token for the home collection's Inbox (`POST /api/me/tokens`,
+  with the cookie and the server's `Origin`), named "iPhone app", and keeps it in the keychain
+  under the app group, where the extension reads it. Signed out (a 401, or no cookie) → the
+  stored token is dropped at once; revoked in Settings → a new one is made on the next check.
+- **The share extension** sends the Shortcut's own form (`item`, `url`, `title`, `photo`), so
+  the server treats both alike. 401 or 403 → "open Commonplace and sign in".
+- **Siri** (`ios/Intents/`, in the iPhone and Mac apps, never the extensions): the App Intent
+  **Save to Commonplace** sends what's said as `item` with the same token, and its App Shortcut
+  phrases need no setup. Siri says the server's words, or why it wasn't saved.
+- The web client knows it's in the app by `CommonplaceApp/` in the user agent
+  (`web/lib/iphoneApp.ts`).
+- **Universal links and password autofill:** `/.well-known/apple-app-site-association`
+  (`src/iosApp.ts`), served only when `APPLE_APP_IDS` names the app.
+- Tests: `xcodebuild test` (the form, the keychain, the launch) and `bun scripts/ios-e2e.ts`
+  (a scratch server; the app signs in on the simulator, makes its token, a link, a text and a
+  photo sent with it land in the Inbox, and `ShareSheetTests` shares a page from Safari and a
+  photo from Photos through the real share sheet into the extension).
+
+### 7.13 The Mac app
+
+The same project (`ios/project.yml`) builds a Mac app, `CommonplaceMac`, with its own share
+extension (`MacShare`). Like the iPhone app it's the web client in a `WKWebView` (`ios/Mac/
+WebPage.swift`, one per window) and a client of `/api/capture`; the code that isn't screens is
+shared in `ios/Shared/` (`AppConfig`, `TokenStore`, `TokenKeeper`, `Capture`, `ShareModel`).
+
+- **The server is chosen in Settings**, not built in: the cloud (the default), the laptop kit at
+  `localhost:8070`, or another address. The choice is kept in the app group's defaults
+  (`AppConfig.serverURL`), so the extension sends to the same server; every window loads the
+  new one at once. Tokens are kept per server (the keychain account is the server's origin).
+- **The keychain** is the data protection keychain, in a group of its own
+  (`keychain-access-groups`, `<team>.com.davidroliver.commonplace.shared`): a Mac app group isn't
+  a keychain group. That entitlement needs a provisioning profile, which Xcode makes.
+- **Sandboxed**, with network client, user-selected files and Downloads. File inputs use
+  `NSOpenPanel`, downloads `NSSavePanel`, other sites the default browser. The menus add only
+  keys the web client doesn't use (⌘R, zoom, ⌘[ ⌘]); the page gets every key first.
+- The user agent says `CommonplaceMac/` (and Safari), so the web client treats it as Safari.
+- Tests: `xcodebuild -scheme CommonplaceMac test` (the form and keychain tests the iPhone runs,
+  the server choice, and a UI test of the window, menus and Settings).
+
 ## 8. Security model
 
 | Concern | Approach | Where |
 |---|---|---|
 | Passwords | argon2id (`Bun.password`). Login compares against a dummy hash for unknown emails, so timing doesn't reveal accounts. | `auth.ts` |
+| Passkeys | WebAuthn (F32, `@simplewebauthn/server`): user verification required, discoverable credentials, `none` attestation. Only the public half is stored (`passkeys`), per relying party (the address the request came to, so the cloud and a kit have their own). The sign-in options name no credentials, so they don't reveal who has an account; each challenge is kept in memory for five minutes and used once. A passkey sign-in starts the same session as a password. Removing one sets `removed_at` (Undo clears it); removed ones are deleted after a day. The iPhone and Mac apps can use them because their associated domains include `webcredentials:` and the server's `apple-app-site-association` names them. | `passkeys.ts`, `api.ts` |
+| Two-step sign-in | F40. TOTP (RFC 6238: HMAC-SHA1, 30 s, six digits, ±1 step), written out in `totp.ts` with Node's crypto. The secret is sealed with SECRETS_KEY (`users.totp_secret`); `totp_last_step` stops a code being used twice, and the update that sets it is conditional so two sign-ins can't take one step. A right password for such an account answers `{twoStep, flow}` with no cookie; `/api/login/code` finishes it (five tries per flow, five minutes, in memory like the other sign-in state). Ten single-use recovery codes, SHA-256 hashed (`recovery_codes`). Turning it on asks for a code and the password, and signs out the other sessions. Passkey sign-in asks for no code. **Passkeys only** (`users.password_off`) swaps the password hash for one of a random password, so a password sign-in fails exactly like a wrong one; it needs a passkey at this address, the last passkey can't be removed, and setting a password again is proved with a passkey assertion. `scripts/reset-password.ts` clears all of it for a locked-out person. The QR code is drawn by `qrcode-generator`. | `twoStep.ts`, `totp.ts`, `api.ts` |
 | Sessions | A random token in an `HttpOnly`, `SameSite=Lax` cookie, `Secure` behind HTTPS. Only its SHA-256 is stored. Signing out or deleting a user closes their sockets and streams at once. | `auth.ts`, `api.ts` |
 | CSRF | Writes and WebSocket upgrades must come from the same origin. A request with no `Origin` header comes from a non-browser client, which has no ambient cookie to abuse. | `auth.ts: sameOrigin` |
 | Authorisation | Roles per vault, checked on every route and on every WebSocket sync message. Viewers are read-only everywhere. Non-members get 404. | `vaults.ts`, `api.ts`, `collab.ts` |
 | Consent to share | Nobody is added to a vault without accepting: an owner's invite creates a pending row in `vault_invites` that grants no access (notes, search, events, sockets, tokens, MCP and the in-app AI all read `vault_members`). The reply is the same whether or not the email has an account, so it doesn't reveal who has one. An invitation closes if its sender stops being an owner. | `vaults.ts`, `api.ts` |
-| Bearer tokens | Prefixed (`cpc_`, `cpm_`), stored hashed, scoped, revocable, shown once, never accepted in a URL. | `tokens.ts` |
+| Bearer tokens | Prefixed (`cpc_`, `cpm_`, `cpd_`), stored hashed, scoped, revocable, shown once, never accepted in a URL. Each kind is refused where another is read. | `tokens.ts` |
+| A Mac signed in (F23) | A device token (`cpd_`), made only by signing in with the `device` scope (never advertised to other clients, granted only when it's all that's asked for), opens the app's own collection routes (`vaultCtx`, the list, the session, events) and the live socket as its person; never Settings, tokens, AI keys, Admin or `/mcp`, which read only the cookie. Its sockets go by the token's row, so signing the Mac out in Connections closes them at once, though the access token rotates hourly. | `tokens.ts: requestUser`, `oauth.ts`, `server.ts`, `api.ts` |
+| MCP sign-in (OAuth) | OAuth 2.1, authorization code with PKCE (S256 only), as the MCP spec asks. Anyone may register a client, so the consent page names the app and the address it returns to, and says to allow only apps you've just added; registered return addresses must be https, http on loopback, or an app's own reverse-domain scheme, and must match exactly (loopback: any port). A problem with the client or its return address is shown on the page, never redirected. Codes last five minutes and work once; access tokens an hour; refresh tokens rotate on use; only hashes are stored. A sign-in is an ordinary `api_tokens` row, so revoking it in Connections ends it at once. Unused registrations go after a day and are capped. | `oauth.ts`, `tokens.ts`, `web/components/OAuthConsent.tsx` |
 | Secrets at rest | People's AI keys and GitHub tokens are sealed with AES-256-GCM under a key derived from `SECRETS_KEY`. They are never returned to the browser (only the last four characters are shown) and never included in backups. | `secrets.ts`, `assistants.ts` |
 | XSS in the app | Rendered markdown goes through DOMPurify; dataviewjs code runs only in a sandboxed, opaque-origin frame with no network (`src/sandbox.ts`), and what it drew for a published page is cut down to a few tags and attributes on the server; Dataview results are built from escaped values and sanitised Markdown, and never run a note's code; Mermaid runs in strict mode, its SVG is sanitised and shadow-rooted, and a note's `%%{init}%%` can't add CSS. Attachments are served with `nosniff` and a sandboxing CSP, so an uploaded SVG can't run script. | `web/lib/render.ts`, `api.ts` |
 | Security headers | The app's page has a CSP: scripts only from the bundle's own files (`'unsafe-inline'` only in development, for Bun's dev script), inline styles (React, CodeMirror), images from `https:` (remote images in notes), connections to itself and its own ws/wss. Nothing may frame it (`frame-ancestors 'none'`, `X-Frame-Options`). Every app response has `nosniff`, `Referrer-Policy: same-origin` (a remote image never learns which note it's in) and, when the cookie is `Secure`, HSTS. Bun's HTML-bundle route takes no headers, so the bundle is mounted at a random private path and `"/*"` serves its HTML with them. | `server.ts` |
 | XSS on sites | Pages are rendered on the server with a tag allow-list and no attributes, and served with a no-script, sandboxed CSP. | `publish.ts` |
-| SSRF | Weblink fetches and the assistant's `read_web_page` allow only http(s) on the standard ports and refuse private, loopback, link-local and metadata addresses, re-checked at every redirect. Assistants' base URLs can't be local in production unless `ALLOW_LOCAL_AI` is set, and are resolved and checked again at every call. Both connect to the address that was checked (Host header and TLS server name set to the name, so the certificate is checked as usual), never to a second lookup, so DNS rebinding can't get past the check. | `egress.ts`, `weblinks.ts`, `llm.ts`, `assistants.ts` |
+| SSRF | Weblink fetches, link cards and the assistant's `read_web_page` allow only http(s) on the standard ports and refuse private, loopback, link-local and metadata addresses, re-checked at every redirect. Assistants' base URLs can't be local in production unless `ALLOW_LOCAL_AI` is set, and are resolved and checked again at every call. Both connect to the address that was checked (Host header and TLS server name set to the name, so the certificate is checked as usual), never to a second lookup, so DNS rebinding can't get past the check. | `egress.ts`, `weblinks.ts`, `llm.ts`, `assistants.ts` |
 | Resource abuse | Limits on note size (5 MB), file and upload size (25 MB), zip entries and expanded size, WebSocket messages (16 MB), tool-loop steps, and image megapixels. A daily £ limit per assistant. | `storage.ts`, `transfer.ts`, `ai.ts`, `imageWorker.ts` |
 | First account | The first account becomes admin. When `SETUP_TOKEN` is set (the Render Blueprint generates one), creating it needs that token, so a fresh deploy can't be claimed by a stranger. Set it on any public deploy. | `auth.ts` |
 
@@ -520,6 +715,8 @@ To report a vulnerability, see [SECURITY.md](../SECURITY.md).
 | **Postgres for everything** (notes, files, vectors, sessions, snapshots). | One thing to back up, restore and reason about; pgvector and full-text search sit beside the data, so there's no index to keep in sync. | Files are kept in the database, so the storage guard matters. Photos are shrunk before they're stored. |
 | **A single instance with in-memory rooms.** | Live editing needs every editor of a note on the same document. One process avoids a pub/sub layer and keeps the hosting cost to about $13 a month. | No horizontal scaling, and a restart reconnects live sessions. Moving rooms to a shared store is the path if that's ever needed. |
 | **No build step** (Bun bundles `web/index.html`). | One command runs everything, and dev and production run the same code path. | The project is tied to Bun's bundler. |
+| **A board is a note holding JSON Canvas, edited as Y.Maps** (F11). | It gets live editing, offline, versions, Trash, sync and moving between collections from the note paths, and stays a plain `.canvas` other editors open. | Every note path has to know a board's text is JSON (`isCanvasPath`), and the same card moved by two people at once keeps the last move. |
+| **AI-XF typed links are made from relation properties at export, and back at import** (F9). | One way to write a relation in Commonplace (decided 2026-10-12), and bundles that round-trip with Longview. | A link's extra fields (`note`, `state`) keep the `links` key for that note, so it then has both. |
 | **Types are notes** (`Types/Person.md`) and views are `.base` files. | Everything stays plain, portable markdown. | A type's schema is only as strict as its frontmatter. |
 | **The GitHub REST API, not git.** | No binary, no clone URLs, no working copies on a small disk. Pushing on the base tree guarantees untouched files stay untouched. | Large repos are capped (5,000 files), and the merge is line-based. |
 | **Publishing is a snapshot**, served from its own tables. | The published site can't reach unpublished notes even by mistake, and edits stay private until republished. | A deleted note stays published until the next Publish. Settings lists it under "To take down". |
@@ -534,6 +731,8 @@ Rejected approaches are recorded under **Decided against** in [BACKLOG.md](BACKL
 - One server instance, with live rooms in memory (see above).
 - Notes are at most 5 MB, and files and attachments at most 25 MB.
 - Imports allow at most 50,000 entries and 1 GB expanded; GitHub vaults at most 5,000 files.
+- Folder vaults (F22) skip notes over 5 MB and files over 25 MB; when an attachment changes on
+  both sides, the folder's copy wins.
 - Embeddings are fixed at 1024 dimensions. Changing that needs a migration and a re-embed.
 - Published sites are unlisted (a random slug and `noindex`), not access-controlled: anyone with
   the link can read them.

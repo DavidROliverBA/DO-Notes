@@ -5,12 +5,14 @@
 // put back; files are only ever copied, never removed. Used by the app (POST /send) and by the
 // assistant's copy_to_vault tool (src/tools.ts), always as the person, with their roles in both.
 
+import { createHash } from "node:crypto";
 import { HttpError, type User } from "./auth";
 import { flushNote, kick } from "./collab";
 import { sql } from "./db";
 import { findWikiLinks, isAttachmentPath, normalisePath, normaliseTarget, parseFrontmatter, rewriteWikiLinks, titleFromPath } from "./markdown";
 import * as notes from "./notes";
 import { assertRoom } from "./storage";
+import { mimeFor as mimeOf } from "./transfer";
 import { typeOf, TYPES_FOLDER } from "./types";
 import { viewsPath } from "./typeIndex";
 import * as vaults from "./vaults";
@@ -122,7 +124,7 @@ export async function planSend(user: User, r: SendRequest): Promise<SendPlan> {
   const takenNotes = new Set<string>();
   const freeNote = async (path: string) => {
     let p = await notes.freeNotePath(to.id, path);
-    for (let i = 1; takenNotes.has(p.toLowerCase()); i++) p = await notes.freeNotePath(to.id, path.replace(/\.md$/i, ` ${i}.md`));
+    for (let i = 1; takenNotes.has(p.toLowerCase()); i++) p = await notes.freeNotePath(to.id, path.replace(/(\.md|\.canvas)$/i, ` ${i}$1`));
     takenNotes.add(p.toLowerCase());
     return p;
   };
@@ -230,7 +232,7 @@ export async function send(user: User, r: SendRequest): Promise<SendReport> {
     report.created.push({ id: made.id, path: made.path, from: null });
   }
   for (const n of p.notes) {
-    const made = await notes.createNote(p.to.id, user.id, n.to, n.content, false);
+    const made = await notes.createNote(p.to.id, user.id, n.to, await notes.keepIdIn(p.to.id, n.to, n.content), false);
     report.created.push({ id: made.id, path: made.path, from: n.path });
     if (!p.move) continue;
     // The note's history goes with it, and it keeps when and by whom it was made.
@@ -243,3 +245,122 @@ export async function send(user: User, r: SendRequest): Promise<SendReport> {
   }
   return report;
 }
+
+// ── between servers (F23): the Mac's Commonplace and the cloud's ─────────────────────────────
+// A send across two servers is two calls the Mac makes in the person's name: bundle() on the
+// side the notes come from, receive() on the side they go to, then (for a move) each original to
+// Trash where it was. Same rules as send(): clashing paths keep both, files land once, the types
+// the notes use come too, and a move carries each note's history.
+
+const MAX_BUNDLE_BYTES = 100 * 1024 * 1024;
+
+export interface Bundle {
+  /** Each note, at its path relative to where it lands ("Plan.md", or "Folder/Sub/Plan.md"). */
+  notes: { id: number; path: string; rel: string; content: string; created_at: string; revisions: { content: string; reason: string; created_at: string }[] }[];
+  /** Files under a sent folder (at `rel`, inside it) and those the notes embed (`rel` null: kept
+   *  at their own path, so other notes find them too). Bytes as base64. */
+  files: { path: string; rel: string | null; data: string }[];
+  types: { path: string; content: string }[];
+}
+
+/** Everything a send would take from this vault, for another server to receive. */
+export async function bundle(user: User, vaultId: number, pick: { notes?: number[]; folder?: string; move?: boolean }): Promise<Bundle> {
+  await vaults.requireRole(vaultId, user, pick.move ? "editor" : "viewer");
+  let picked: { id: number; path: string }[];
+  let folder = "";
+  if (pick.notes?.length) {
+    picked = await sql`select id, path from notes where vault_id = ${vaultId} and id in ${sql(pick.notes)} order by path`;
+    if (picked.length !== new Set(pick.notes).size) throw new HttpError(404, "Note not found");
+  } else if (pick.folder) {
+    folder = normalisePath(pick.folder, null);
+    picked = await sql`select id, path from notes where vault_id = ${vaultId} and lower(path) like ${folder.toLowerCase().replace(/[%_\\]/g, "\\$&") + "/%"} order by path`;
+  } else throw new HttpError(400, "Say which notes or folder");
+  if (picked.length > MAX_NOTES) throw new HttpError(400, `That's more than ${MAX_NOTES} notes: send a smaller folder`);
+  const relOf = (p: string) => (folder ? `${nameOf(folder)}/${p.slice(folder.length + 1)}` : nameOf(p));
+
+  const out: Bundle = { notes: [], files: [], types: [] };
+  let bytes = 0;
+  for (const n of picked) {
+    await flushNote(n.id);
+    const note = await notes.getNote(vaultId, n.id);
+    const revisions = pick.move ? await sql<{ content: string; reason: string; created_at: string }[]>`select content, reason, created_at from note_revisions where note_id = ${n.id} order by id` : [];
+    out.notes.push({ id: n.id, path: n.path, rel: relOf(n.path), content: note.content, created_at: note.created_at ? new Date(note.created_at).toISOString() : "", revisions: [...revisions] });
+    bytes += Buffer.byteLength(note.content);
+  }
+  const seen = new Set<string>();
+  const addFile = async (path: string, rel: string | null) => {
+    if (seen.has(path)) return;
+    seen.add(path);
+    const [f] = await sql`select data from attachments where vault_id = ${vaultId} and path = ${path}`;
+    if (!f) return;
+    bytes += f.data.length;
+    if (bytes > MAX_BUNDLE_BYTES) throw new HttpError(413, "That's more than 100 MB: send a smaller folder");
+    out.files.push({ path, rel, data: Buffer.from(f.data).toString("base64") });
+  };
+  if (folder) for (const f of await sql`select path from attachments where vault_id = ${vaultId} and lower(path) like ${folder.toLowerCase().replace(/[%_\\]/g, "\\$&") + "/%"} order by path`) await addFile(f.path, relOf(f.path));
+  for (const n of out.notes)
+    for (const l of findWikiLinks(n.content)) {
+      if (!l.embed || !isAttachmentPath(l.target)) continue;
+      const f = await attachmentFor(vaultId, l.target);
+      if (f) await addFile(f.path, null);
+    }
+  const typeNames = new Set(out.notes.map((n) => typeOf(parseFrontmatter(n.content).data)).filter((t): t is string => !!t));
+  for (const t of typeNames) {
+    const def = await notes.findByPath(vaultId, normalisePath(`${TYPES_FOLDER}/${t}`));
+    if (!def) continue;
+    await flushNote(def.id);
+    out.types.push({ path: def.path, content: (await notes.getNote(vaultId, def.id)).content });
+    await addFile(viewsPath(t), null);
+  }
+  return out;
+}
+
+/** Take a bundle from another server into `vaultId` (inside `into`), as send() would. */
+export async function receive(user: User, vaultId: number, b: Bundle & { into: string; move: boolean }): Promise<Omit<SendReport, "from" | "trashIds">> {
+  await vaults.requireRole(vaultId, user, "editor");
+  const into = b.into ? normalisePath(b.into, null) : "";
+  const files = b.files.map((f) => ({ ...f, bytes: new Uint8Array(Buffer.from(f.data, "base64")) }));
+  await assertRoom(b.notes.reduce((s, n) => s + Buffer.byteLength(n.content) + n.revisions.reduce((r, x) => r + Buffer.byteLength(x.content), 0), 0) + files.reduce((s, f) => s + f.bytes.byteLength, 0));
+  const report: Omit<SendReport, "from" | "trashIds"> = { to: vaultId, move: b.move, created: [], files: [] };
+
+  // Files: each lands once; one already there with the same bytes is used where it is.
+  const landsAt = new Map<string, string>();
+  const taken = new Set<string>();
+  for (const f of files) {
+    const want = f.rel !== null ? within(into, f.rel) : normalisePath(f.path, null);
+    for (let i = 0; ; i++) {
+      const p = i ? want.replace(/( \d+)?(\.[^.]+)$/, ` ${i}$2`) : want;
+      if (taken.has(p.toLowerCase())) continue;
+      const [there] = await sql`select md5(data) as h from attachments where vault_id = ${vaultId} and lower(path) = lower(${p})`;
+      if (there && there.h !== md5hex(f.bytes)) continue;
+      taken.add(p.toLowerCase());
+      landsAt.set(f.path, p);
+      if (!there) {
+        await sql`insert into attachments (vault_id, path, mime, size, data, created_by) values (${vaultId}, ${p}, ${mimeOf(p)}, ${f.bytes.byteLength}, ${f.bytes}, ${user.id}) on conflict (vault_id, path) do nothing`;
+        report.files.push(p);
+      }
+      break;
+    }
+  }
+  for (const t of b.types) {
+    if (await notes.findByPath(vaultId, t.path)) continue;
+    if (b.notes.some((n) => within(into, n.rel).toLowerCase() === t.path.toLowerCase())) continue;
+    const made = await notes.createNote(vaultId, user.id, t.path, t.content, false);
+    report.created.push({ id: made.id, path: made.path, from: null });
+  }
+  for (const n of b.notes) {
+    let content = n.content;
+    for (const [from, at] of landsAt) if (from !== at) content = rewriteWikiLinks(content, (t) => t === normaliseTarget(from) || t === normaliseTarget(nameOf(from)), at);
+    const at = await notes.freeNotePath(vaultId, within(into, n.rel));
+    const made = await notes.createNote(vaultId, user.id, at, await notes.keepIdIn(vaultId, at, content), false);
+    report.created.push({ id: made.id, path: made.path, from: n.path });
+    if (!b.move) continue;
+    await sql.begin(async (tx) => {
+      if (n.created_at) await tx`update notes set created_at = ${n.created_at} where id = ${made.id}`;
+      for (const r of n.revisions) await tx`insert into note_revisions (note_id, content, author_id, reason, created_at) values (${made.id}, ${r.content}, ${user.id}, ${r.reason}, ${r.created_at})`;
+    });
+  }
+  return report;
+}
+
+const md5hex = (b: Uint8Array) => createHash("md5").update(b).digest("hex");

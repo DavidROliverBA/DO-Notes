@@ -147,7 +147,7 @@ export function parseDuration(s: string): Dur | null {
   return at === text.length && at > 0 ? new Dur(parts) : null;
 }
 
-const LINK_TEXT = /^(!?)\[\[([^\[\]|\n]+?)(?:\|([^\[\]\n]*))?\]\]$/;
+const LINK_TEXT = /^(!?)\[\[([^\[\]|\n]+?)(?:\\?\|([^\[\]\n]*))?\]\]$/;
 
 function linkFromText(s: string): Link | null {
   const m = LINK_TEXT.exec(s.trim());

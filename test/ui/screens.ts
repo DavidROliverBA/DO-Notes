@@ -45,6 +45,7 @@ const HELP_SHOTS: Record<string, string> = {
   "laptop-light-10d-new-type": "new-type",
   "laptop-light-11-embed-card": "embeds",
   "laptop-light-12-tasks": "tasks",
+  "laptop-light-12c-journal": "journal",
   "laptop-light-12b-mentions": "links-panel",
   "laptop-light-13-branch-bar": "github-branch-bar",
   "laptop-light-13b-changes": "github-changes",
@@ -120,6 +121,21 @@ try {
     content: '# Timeline\n\n```mermaid\nflowchart LR\n  Q[Quotes] --> O[Order units] --> F[Fit] --> D[Done]\n```\n\nEvery project, from its properties:\n\n```dataview\nTABLE status, due, budget\nFROM "Projects"\nWHERE status\n```\n',
   });
   const overview = await api(`/vaults/${vaultId}/notes`, { path: "Projects/Kitchen/Overview.md", content: "# Kitchen overview\n\nThe builder:\n\n[[Sam Okafor]]\n\nWhat's left, from the plan:\n\n![[Kitchen plan#Tasks]]\n" });
+  // The journal (F24): a few days of entries, one from a year ago for On this day.
+  const today = new Date();
+  const dayOf = (back: number, years = 0) => {
+    const d = new Date(today.getFullYear() - years, today.getMonth(), today.getDate() - back);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+  for (const [day, time, text] of [
+    [dayOf(0, 1), "18:30", "Got the keys. The kitchen is worse than it looked at the viewing."],
+    [dayOf(2), "20:15", "Sam came round about the worktops. **Quartz** it is."],
+    [dayOf(1), "07:50", "Coffee on the step before anyone was up."],
+    [dayOf(0), "08:05", "Tiles to choose this week. Priya sent three samples."],
+    [dayOf(0), "21:40", "Long walk by the harbour; the light was lovely."],
+  ] as const)
+    await api("/journal", { text, day, time, vaultId });
+
   await api("/me/assistants", { name: "Claude", provider: "compatible", baseUrl: `${fake.url}/v1`, model: "claude-opus-5-5", apiKey: "screens-fake-key", web: true });
   // One AI exchange: a search, an answer with a link, and a page proposed for approval.
   const aiScript = () =>
@@ -203,7 +219,7 @@ try {
         box-shadow: 0 40px 90px rgba(0,0,0,.6), 0 0 0 2px #3a3646; }
       .phone img { display: block; width: 100%; border-radius: 44px; }
     </style>
-    <div class="win"><div class="bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span>Commonplace</span></div><img src="${laptop}"></div>
+    <div class="win"><div class="bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span>DO Notes</span></div><img src="${laptop}"></div>
     <div class="phone"><img src="${phone}"></div>`, { waitUntil: "load" });
     mkdirSync("docs/images", { recursive: true });
     await p.screenshot({ path: "docs/images/hero.webp", type: "webp", quality: 82 });
@@ -221,6 +237,11 @@ try {
     if (HELP && HELP_SHOTS[name]) await p.screenshot({ path: join(HELP_DIR, `${HELP_SHOTS[name]}.webp`) as `${string}.webp`, type: "webp", quality: 72 });
   };
   if (README) await readmeShot();
+  // F28's writing blocks: an icon, contents, status labels, a folding callout.
+  const blocks = await api(`/vaults/${vaultId}/notes`, {
+    path: "Projects/Kitchen/Kitchen timeline.md",
+    content: "---\nicon: 🧱\n---\n# Kitchen timeline\n\n[TOC]\n\n## Now\n\nWorktops :status[Ordered]{.blue} · Tiles :status[Choosing]{.amber} · Electrics :status[Done]{.green}\n\nFitter booked for 2026-11-09\n\n> [!info]- Why quartz\n> Harder wearing than wood, and the samples matched the floor.\n\n## Next\n\n- [ ] Book the tiler\n\n```sql\nselect item, cost from quotes -- cheapest first\nwhere room = 'kitchen' order by cost limit 3;\n```\n",
+  });
   for (const device of README ? [] : (["laptop", "phone"] as const)) {
     for (const scheme of HELP ? (["light"] as const) : (["light", "dark"] as const)) {
       await browser.close();
@@ -233,12 +254,96 @@ try {
 
       await p.goto(`${BASE}/v/${vaultId}`, { waitUntil: "load" });
       await p.waitForSelector(".vault-home");
+      // The guided tour: its offer, and a step pointing at the properties. Then it's been seen, so
+      // the shots after (and the help's home picture) don't show the offer.
+      await p.waitForSelector(".tour-offer-card");
+      await shot(p, `${tag}-1b-tour-offer`);
+      await p.click(".tour-offer-card .primary");
+      await p.waitForFunction(() => document.querySelector<HTMLElement>(".tour")?.dataset.step === "welcome");
+      for (let i = 0; i < 20 && (await p.$eval(".tour", (t) => (t as HTMLElement).dataset.step)) !== "properties"; i++) {
+        const was = await p.$eval(".tour", (t) => (t as HTMLElement).dataset.step);
+        await p.click(".tour-next");
+        await p.waitForFunction((w) => document.querySelector<HTMLElement>(".tour")?.dataset.step !== w, {}, was);
+      }
+      await p.waitForFunction(() => document.querySelector<HTMLElement>(".tour-card")?.style.visibility !== "hidden" && !!document.querySelector(".tour-spot"));
+      await Bun.sleep(400);
+      await shot(p, `${tag}-1c-tour-step`);
+      await p.keyboard.press("Escape");
+      await p.waitForSelector(".tour", { hidden: true });
+      await p.goto(`${BASE}/v/${vaultId}`, { waitUntil: "load" });
+      await p.waitForSelector(".vault-home");
       await shot(p, `${tag}-1-home`);
 
       await p.goto(`${BASE}/v/${vaultId}/n/${kitchen.id}`, { waitUntil: "load" });
       await p.waitForSelector(".cm-content");
       await Bun.sleep(800);
       await shot(p, `${tag}-2-note`);
+
+      await p.goto(`${BASE}/v/${vaultId}/n/${blocks.id}`, { waitUntil: "load" });
+      await p.waitForSelector(".cm-lp-toc");
+      await Bun.sleep(500);
+      await shot(p, `${tag}-2e-blocks`);
+      await p.$eval(".cm-scroller", (e) => (e.scrollTop = e.scrollHeight));
+      await Bun.sleep(300);
+      await shot(p, `${tag}-2f-code`);
+      await p.$eval(".cm-scroller", (e) => (e.scrollTop = 0));
+      await p.evaluate(() => {
+        const line = [...document.querySelectorAll(".cm-line")].find((l) => l.textContent === "Now")!;
+        line.querySelector(".cm-fold-chevron")!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+      });
+      await p.waitForSelector(".cm-fold-placeholder");
+      await shot(p, `${tag}-2g-fold`);
+      // Notes reopen where they were left: start the kitchen note at the top for the shots after.
+      await p.evaluate(() => localStorage.removeItem("cp:places"));
+      await p.goto(`${BASE}/v/${vaultId}/n/${kitchen.id}`, { waitUntil: "load" });
+      await p.waitForSelector(".cm-content");
+      if (device === "laptop") {
+        // Hover preview: rest on the first [[link]].
+        const at = await p.$eval(".cm-lp-wikilink", (e) => {
+          const b = e.getBoundingClientRect();
+          return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
+        });
+        await p.mouse.move(at.x, at.y);
+        await p.waitForSelector(".hover-preview .hover-preview-text");
+        await Bun.sleep(200);
+        await shot(p, `${tag}-2h-hover`);
+        await p.mouse.move(5, 5);
+        await p.waitForSelector(".hover-preview", { hidden: true });
+        // The format bar over selected words.
+        const words = await p.evaluate(() => {
+          const line = [...document.querySelectorAll(".cm-line")].find((l) => l.textContent?.startsWith("Agreed with"))!;
+          const b = line.getBoundingClientRect();
+          return { x: b.right - 2, y: b.top + b.height / 2 };
+        });
+        await p.mouse.click(words.x, words.y);
+        await p.keyboard.press("ArrowLeft"); // before the full stop
+        await p.keyboard.down("Shift");
+        await p.keyboard.down("Alt");
+        await p.keyboard.press("ArrowLeft");
+        await p.keyboard.press("ArrowLeft");
+        await p.keyboard.up("Alt");
+        await p.keyboard.up("Shift");
+        await p.waitForSelector(".cm-format-bar");
+        await Bun.sleep(200);
+        await shot(p, `${tag}-2i-format-bar`);
+        await p.keyboard.press("ArrowRight"); // no selection, so no bar
+        await p.waitForSelector(".cm-format-bar", { hidden: true });
+      }
+
+      // A table's bar and its Column menu, on the Costs table.
+      await p.$eval('.cm-table-edit td[data-r="1"][data-c="1"]', (e) => e.scrollIntoView({ block: "center" }));
+      await p.click('.cm-table-edit td[data-r="1"][data-c="1"]');
+      await p.waitForSelector(".table-bar", { visible: true });
+      await shot(p, `${tag}-2j-table-bar`);
+      await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".table-bar button")].find((b) => b.getAttribute("aria-label") === "Column")!.click());
+      await p.waitForSelector(".menu");
+      await Bun.sleep(200);
+      await shot(p, `${tag}-2k-table-menu`);
+      await p.keyboard.press("Escape");
+      await p.evaluate(() => localStorage.removeItem("cp:places"));
+      await p.goto(`${BASE}/v/${vaultId}/n/${kitchen.id}`, { waitUntil: "load" });
+      await p.waitForSelector(".cm-content");
+      await Bun.sleep(500);
 
       await p.click('button[aria-label="More"]');
       await p.waitForSelector(".menu");
@@ -353,6 +458,9 @@ try {
       await p.goto(`${BASE}/v/${vaultId}/tasks`, { waitUntil: "load" });
       await p.waitForSelector(".task-list li");
       await shot(p, `${tag}-12-tasks`);
+      await p.goto(`${BASE}/v/${vaultId}/journal`, { waitUntil: "load" });
+      await p.waitForSelector(".journal-day");
+      await shot(p, `${tag}-12c-journal`);
       // The timeline (F21): the meetings from July to September, the later ones faded.
       await p.goto(`${BASE}/v/${vaultId}/graph?type=Meeting&from=2026-07-01&to=2026-09-30`, { waitUntil: "load" });
       await p.waitForSelector(".graph-timeline");
@@ -415,6 +523,19 @@ try {
         await p.waitForSelector(".sidebar .branch-count");
         await Bun.sleep(400);
         await shot(p, `${tag}-13a-branch-drawer`);
+        // Searching folds away what's above the box.
+        await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".sidebar .tabs button")].find((b) => b.textContent === "Search")!.click());
+        await p.waitForSelector(".search-panel input");
+        await p.focus(".search-panel input");
+        await p.keyboard.type("flue");
+        await Bun.sleep(800);
+        await shot(p, `${tag}-13g-search-drawer`);
+        await p.$eval(".search-panel input", (e) => {
+          const i = e as HTMLInputElement;
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(i, "");
+          i.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".sidebar .tabs button")].find((b) => b.textContent === "Files")!.click());
         await p.evaluate(() => document.querySelector<HTMLElement>(".scrim")?.click());
       }
       await p.goto(`${BASE}/v/${ghVault}/changes`, { waitUntil: "load" });
@@ -431,6 +552,14 @@ try {
       await p.waitForSelector(".branch-auto");
       await Bun.sleep(400);
       await shot(p, `${tag}-13d-auto-bar`);
+      if (device === "phone") {
+        await p.click(".note-header .panel-toggle");
+        await p.waitForSelector(".sidebar .branch-auto");
+        await Bun.sleep(400);
+        await shot(p, `${tag}-13h-auto-drawer`);
+        await p.evaluate(() => document.querySelector<HTMLElement>(".scrim")?.click());
+        await Bun.sleep(300);
+      }
       await p.goto(`${BASE}/v/${ghAuto}/changes`, { waitUntil: "load" });
       await p.waitForSelector(".change-held");
       await shot(p, `${tag}-13e-held`);
@@ -504,6 +633,18 @@ try {
       }
       await p.click("button.account");
       await p.waitForSelector(".settings-nav");
+      // Settings → Account → Reminders (F35).
+      if (device === "phone") await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".settings-nav button")].find((b) => b.textContent?.startsWith("Account"))?.click());
+      await p.waitForSelector("#reminder-time");
+      await p.evaluate(() => document.querySelector("#reminder-time")!.closest("section")!.scrollIntoView({ block: "center" }));
+      await shot(p, `${tag}-7a-reminders`);
+      // Two-step sign-in (F40): setting up the code app.
+      await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".two-step button")].find((b) => b.textContent?.includes("Turn on two-step"))!.click());
+      await p.waitForSelector(".two-step-setup img");
+      await p.evaluate(() => document.querySelector(".two-step")!.scrollIntoView({ block: "center" }));
+      await shot(p, `${tag}-7a2-two-step`);
+      await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".two-step-setup button")].find((b) => b.textContent === "Cancel")!.click());
+      if (device === "phone") await p.click(".settings-back");
       await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".settings-nav button")].find((b) => b.textContent?.startsWith("Connections"))!.click());
       await p.waitForFunction(() => [...document.querySelectorAll<HTMLButtonElement>(".modal button")].some((b) => b.textContent === "Create token"));
       await p.evaluate(() => [...document.querySelectorAll<HTMLButtonElement>(".modal button")].find((b) => b.textContent === "Create token")!.click());

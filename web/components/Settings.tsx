@@ -10,8 +10,10 @@ import { Icon } from "../ui/Icon";
 import { Modal } from "../ui/Modal";
 import { AccountSettings, AdminSettings } from "./Account";
 import { Assistants } from "./Assistants";
+import { CloudConnection, CloudVaultSettings, MacsSignedIn } from "./CloudLibrary";
 import { ConnectClaude } from "./ConnectClaude";
 import { GitHubAccount } from "./GitHubVault";
+import { Connections } from "./Connections";
 import { ShareFromPhone } from "./ShareFromPhone";
 import { SiteSettings } from "./SiteSettings";
 import { VaultSettings } from "./VaultSettings";
@@ -42,7 +44,7 @@ function Settings({ vault, user, library, onVaultChanged, onAccountChanged, init
     { id: "vault", label: "This collection", icon: "vault", hint: `${vault.name}: members, import, export` },
     { id: "site", label: "Website", icon: "globe", hint: "Publish this collection as a site" },
     { id: "assistants", label: "AI assistants", icon: "sparkle", hint: "Your own AI keys and limits" },
-    { id: "connections", label: "Connections", icon: "link", hint: "Claude, GitHub, Share from iPhone" },
+    { id: "connections", label: "Connections", icon: "link", hint: "Claude, Longview, Recall, GitHub, Share from iPhone" },
     ...(user.is_admin ? [{ id: "admin" as const, label: "Admin", icon: "users", hint: "Accounts and storage" }] : []),
   ];
   // On a laptop a section is always open; the list alone is the iPhone's first screen.
@@ -78,12 +80,15 @@ function Settings({ vault, user, library, onVaultChanged, onAccountChanged, init
               <Icon name="chevron-left" size={16} /> Settings
             </button>
             {shown === "account" && <AccountSettings user={user} onChanged={onAccountChanged} />}
-            {shown === "vault" && <VaultSettings vault={vault} user={user} onClose={closeSettings} onChanged={onVaultChanged} />}
-            {shown === "site" && <SiteSettings vault={vault} />}
+            {shown === "vault" && (vault.cloud ? <CloudVaultSettings vault={vault} /> : <VaultSettings vault={vault} user={user} onClose={closeSettings} onChanged={onVaultChanged} />)}
+            {shown === "site" && (vault.cloud ? <CloudVaultSettings vault={vault} /> : <SiteSettings vault={vault} />)}
             {shown === "assistants" && <Assistants />}
             {shown === "connections" && (
               <>
+                <CloudConnection />
                 <ConnectClaude />
+                <Connections />
+                <MacsSignedIn />
                 <GitHubAccount />
                 <ShareFromPhone />
               </>

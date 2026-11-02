@@ -50,6 +50,38 @@
   color: var(--text);
   padding: 0;
 }
+/* A code block's language and Copy (src/codeHighlight.ts), over its top right corner. */
+.markdown .code-block {
+  position: relative;
+}
+.markdown .code-block pre {
+  margin-top: 0;
+}
+.markdown .code-bar {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-small);
+  color: var(--faint);
+}
+.markdown .code-copy {
+  font-size: var(--text-small);
+  padding: 2px 8px;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.markdown .code-block:hover .code-copy,
+.markdown .code-copy:focus-visible {
+  opacity: 1;
+}
+@media (pointer: coarse) {
+  .markdown .code-copy {
+    opacity: 1;
+  }
+}
 .markdown blockquote {
   border-left: 3px solid var(--accent);
   margin-left: auto;
@@ -168,11 +200,134 @@
      don't, in light or dark). */
   color: color-mix(in srgb, var(--c) 70%, var(--text));
 }
+/* A folding callout (F28's Expand): <details>, its title the summary with a turning chevron. */
+summary.callout-title {
+  cursor: pointer;
+  list-style: none;
+}
+summary.callout-title::-webkit-details-marker {
+  display: none;
+}
+summary.callout-title::before {
+  content: "›";
+  display: inline-block;
+  width: 1em;
+  transition: transform var(--dur-fast) var(--ease);
+}
+details.callout[open] > summary.callout-title::before {
+  transform: rotate(90deg);
+}
 .callout-body > :first-child {
   margin-top: 4px;
 }
 .callout-body > :last-child {
   margin-bottom: 0;
+}
+
+/* ── Status labels and the table of contents (F28): reading view, Live Preview, sites ───── */
+.status {
+  --c: var(--muted);
+  display: inline-block;
+  padding: 0 7px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--c) 16%, transparent);
+  color: color-mix(in srgb, var(--c) 70%, var(--text));
+  font-size: 0.8em;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  line-height: 1.6;
+  vertical-align: 0.08em;
+}
+/* In Live Preview the editor colours `[label]` as a link; the label's own colour wins. */
+.status * {
+  color: inherit !important;
+  text-decoration: none !important;
+}
+.status-blue { --c: var(--info); }
+.status-green { --c: var(--ok); }
+.status-amber { --c: var(--warn); }
+.status-red { --c: var(--danger); }
+.status-purple { --c: var(--accent); }
+.toc {
+  border-left: 2px solid var(--line);
+  padding: 2px 0 2px 14px;
+  margin: 1em 0;
+}
+.toc ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.toc li {
+  margin: 2px 0;
+}
+.toc .toc-l1 { padding-left: 1em; }
+.toc .toc-l2 { padding-left: 2em; }
+.toc-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+.toc-link:hover {
+  text-decoration: underline;
+}
+.toc-empty {
+  color: var(--muted);
+  margin: 0;
+}
+
+/* ── Link cards for web addresses (F28): reading view and Live Preview ─────────────────── */
+.web-card.filled > .web-card-link {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  text-decoration: none;
+  color: var(--text);
+  background: var(--bg);
+  margin: 0.6em 0;
+}
+.web-card.filled > .web-card-link:hover {
+  border-color: var(--accent);
+}
+.web-card-link img {
+  flex: 0 0 120px;
+  width: 120px;
+  object-fit: cover;
+  background: var(--bg2);
+}
+.web-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px 10px 0;
+  min-width: 0;
+}
+.web-card-link:not(:has(img)) .web-card-text {
+  padding-left: 12px;
+}
+.web-card-title {
+  font-weight: 650;
+}
+.web-card-desc {
+  color: var(--muted);
+  font-size: var(--text-ui-sm);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.web-card-site {
+  color: var(--faint);
+  font-size: var(--text-small);
+}
+@media (max-width: 700px) {
+  .web-card-link img {
+    flex-basis: 84px;
+    width: 84px;
+  }
 }
 
 /* ── Notes inside notes (F2) and link cards (F16 step 5): reading view and Live Preview ──── */
@@ -532,4 +687,36 @@ mark.hl-grey, .hl-grey { background: var(--hl-grey); color: inherit; }
   .live-preview .cm-lp-dvjs-edit {
     opacity: 1;
   }
+}
+/* Code coloured by language (src/codeHighlight.ts): the `tok-*` classes of lezer's
+   classHighlighter, in reading view, published pages and the editor alike. */
+.tok-keyword,
+.tok-operatorKeyword,
+.tok-modifier {
+  color: var(--syn-keyword);
+}
+.tok-string,
+.tok-string2,
+.tok-regexp {
+  color: var(--syn-string);
+}
+.tok-comment {
+  color: var(--syn-comment);
+  font-style: italic;
+}
+.tok-number,
+.tok-bool,
+.tok-atom,
+.tok-literal {
+  color: var(--syn-number);
+}
+.tok-typeName,
+.tok-className,
+.tok-namespace {
+  color: var(--syn-type);
+}
+.tok-propertyName,
+.tok-variableName2,
+.tok-macroName {
+  color: var(--syn-fn);
 }

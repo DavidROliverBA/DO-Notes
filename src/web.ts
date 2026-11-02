@@ -34,7 +34,7 @@ export async function connection(userId: number): Promise<{ provider: string; ke
 export async function connect(userId: number, raw: string): Promise<{ provider: string; key_hint: string }> {
   const key = raw.trim();
   if (key.length < 10) throw new HttpError(400, "Paste the Brave Search API key");
-  await brave(key, "Commonplace", 1);
+  await brave(key, "DO Notes", 1);
   await sql`insert into user_search (user_id, provider, key_enc, key_hint) values (${userId}, 'brave', ${seal(key)}, ${hint(key)})
             on conflict (user_id) do update set key_enc = excluded.key_enc, key_hint = excluded.key_hint, created_at = now()`;
   return { provider: "brave", key_hint: hint(key) };

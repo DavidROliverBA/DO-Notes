@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>DO Notes Clipper options</title>
+    <link rel="stylesheet" href="clipper.css" />
+  </head>
+  <body>
+    <main class="options">
+      <h1><img src="icons/icon-32.png" alt="" width="20" height="20" /> DO Notes Clipper</h1>
+      <p class="muted">In Safari with the DO Notes Mac app, there's nothing to set: the clipper uses the app's sign-in. Elsewhere, give it your DO Notes address and a capture token from Settings → Connections → Share from iPhone → <b>Create token</b>.</p>
+      <form id="form">
+        <label for="server">DO Notes address</label>
+        <input id="server" type="url" placeholder="https://notes.example.com" required />
+        <label for="token">Capture token</label>
+        <input id="token" type="password" placeholder="cpc_…" autocomplete="off" required />
+        <div class="actions">
+          <button class="primary" type="submit">Save</button>
+          <button id="forget" type="button">Forget</button>
+        </div>
+        <p id="status" role="status" aria-live="polite"></p>
+      </form>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

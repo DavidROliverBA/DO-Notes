@@ -1,6 +1,6 @@
 {
-  "name": "Commonplace",
-  "short_name": "Commonplace",
+  "name": "DO Notes",
+  "short_name": "DO Notes",
   "description": "A shared markdown knowledge base.",
   "start_url": "/",
   "display": "standalone",

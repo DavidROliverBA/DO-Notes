@@ -73,13 +73,13 @@ const sandboxPacked = Buffer.from(gzipSync(new TextEncoder().encode((await datav
 
 const icon = await Bun.file(join(here, "..", "web", "icon.svg")).text();
 const html = `<!doctype html>
-<!-- Commonplace ${pkg.version}, MIT licence. It includes open-source packages, each under its own licence; their notices: https://github.com/DavidROliverBA/commonplace-md/blob/main/THIRD_PARTY_NOTICES.md -->
+<!-- DO Notes ${pkg.version}, MIT licence. It includes open-source packages, each under its own licence; their notices: https://github.com/DavidROliverBA/commonplace-md/blob/main/THIRD_PARTY_NOTICES.md -->
 <html lang="en-GB">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="generator" content="Commonplace ${pkg.version} standalone">
-<title>Commonplace</title>
+<meta name="generator" content="DO Notes ${pkg.version} standalone">
+<title>DO Notes</title>
 <meta name="description" content="A Markdown editor for a folder of notes, in one file.">
 <meta name="theme-color" content="#f7f6fb" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#1c1b22" media="(prefers-color-scheme: dark)">

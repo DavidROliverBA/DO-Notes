@@ -16,6 +16,13 @@
   --accent-text: #ffffff;
   --on-color: #ffffff; /* text on a user's colour (avatars) */
   --code: #b5386b;
+  /* code colouring (src/codeHighlight.ts) */
+  --syn-keyword: #8430ce;
+  --syn-string: #188038;
+  --syn-comment: #706d83;
+  --syn-number: #b25e00;
+  --syn-type: #1a6fc2;
+  --syn-fn: #b5386b;
   --code-bg: #f3f1f8;
   --mark: #fff3a3;
   --node: #8f8aa8;
@@ -85,6 +92,9 @@
 
   /* touch: the smallest tap target on a phone (Apple HIG) */
   --tap: 44px;
+  /* room kept below a text box while the iPhone's keyboard is up, for the ˄ ˅ ✓ bar iOS floats
+     above it (a web page can't hide that bar; web/main.tsx) */
+  --keyboard-bar: 64px;
 
   /* layout */
   --sidebar-w: 272px;
@@ -108,6 +118,13 @@
     --accent-soft: #9d8cf526;
     --accent-text: #15141a;
     --code: #f28fb4;
+    /* code colouring (src/codeHighlight.ts) */
+    --syn-keyword: #c79bff;
+    --syn-string: #8fd19e;
+    --syn-comment: #8e8ba0;
+    --syn-number: #f0b072;
+    --syn-type: #7fb6f5;
+    --syn-fn: #f28fb4;
     --code-bg: #2a2931;
     --mark: #6b5d1e;
     --node: #77738c;
@@ -151,6 +168,13 @@
   --accent-soft: #9d8cf526;
   --accent-text: #15141a;
   --code: #f28fb4;
+  /* code colouring (src/codeHighlight.ts) */
+  --syn-keyword: #c79bff;
+  --syn-string: #8fd19e;
+  --syn-comment: #8e8ba0;
+  --syn-number: #f0b072;
+  --syn-type: #7fb6f5;
+  --syn-fn: #f28fb4;
   --code-bg: #2a2931;
   --mark: #6b5d1e;
   --node: #77738c;

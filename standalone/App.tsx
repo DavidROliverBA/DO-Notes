@@ -1,25 +1,58 @@
-// Commonplace as one HTML file: open a folder of Markdown files and edit them in the app's editor,
-// with the file panel, wikilinks, backlinks, outline, search and the four view modes. No server,
-// no account: the files are the notes (standalone/vault.ts).
+// Commonplace as one HTML file: open folders of Markdown files and edit them in the app's own
+// editor (web/components/Editor.tsx), with the file panel, wikilinks, backlinks, outline, search,
+// the four view modes, the ⌘K palette, bookmarks, saved searches, Today's note, templates, the
+// graph and Tasks. No server, no account: the files are the notes (standalone/vault.ts), and
+// standalone/api-shim.ts answers what the shared code would ask the server. Several folders can
+// be open at once, each a collection; the switcher at the top of the file panel moves between them.
 
 import { useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { findWikiLinks, headings, isAttachmentPath } from "../src/markdown";
-import type { NoteSummary } from "../web/lib/api";
+import { Awareness } from "y-protocols/awareness";
+import * as Y from "yjs";
+import { findWikiLinks, headings, isAttachmentPath, normalisePath } from "../src/markdown";
+import type { NoteSummary, Vault } from "../web/lib/api";
+import { toggleBookmark, isBookmarked, loadBookmarks, useBookmarks } from "../web/lib/bookmarks";
+import { type AppActions, currentCtx, type NoteActions, noteMenu, offerOnly, provide } from "../web/lib/commands";
 import { refreshDataview } from "../web/lib/dataview";
+import { useFullWidth, setFullWidth } from "../web/lib/editorWidth";
 import { hydrate } from "../web/lib/embeds";
-import { resolveLocal } from "../web/lib/links";
-import { renderMarkdown, toggleTask } from "../web/lib/render";
-import { HelpHost } from "../web/components/Help";
-import { QuickSwitcher } from "../web/components/QuickSwitcher";
+import { setFocusMode, useFocusMode } from "../web/lib/focusMode";
+import { graphUrl } from "../web/lib/graph";
 import { openHelp } from "../web/lib/help";
+import { resolveLocal } from "../web/lib/links";
+import { coverSrc, emojiIcon } from "../web/lib/look";
+import { renderMarkdown, toggleTask } from "../web/lib/render";
+import { navigate, noteUrl, parseRoute, usePath } from "../web/lib/router";
+import { loadSavedSearches, removeSearch, saveSearch, useSavedSearches } from "../web/lib/savedSearches";
+import { pickTemplate } from "../web/lib/templateActions";
+import { addDays, dailyDate, dailyPath, dailyTemplatePath, defaultDaily, fillTemplate, formatDate, isoDay } from "../web/lib/templates";
+import { CommandPalette } from "../web/components/CommandPalette";
+import { Editor, type EditorHandle } from "../web/components/Editor";
+import { Graph } from "../web/components/Graph";
+import { HelpHost } from "../web/components/Help";
+import type { Mode } from "../web/components/NoteView";
+import { QuickSwitcher } from "../web/components/QuickSwitcher";
+import { TasksPage } from "../web/components/TasksPage";
+import { ThemeButton } from "../web/components/ThemeButton";
 import { Icon } from "../web/ui/Icon";
 import { Menu } from "../web/ui/Menu";
 import { confirmDialog, Overlays, promptDialog, toast, toastError } from "../web/ui/overlays";
 import { PanelToggle } from "../web/ui/PanelToggle";
-import { Editor, type EditorHandle } from "./Editor";
+import { searchNotes } from "./search";
 import * as vault from "./vault";
 
-type Mode = "edit" | "source" | "split" | "read";
+// What works without a server, in the palette, the ⋯ menu and the / menu. The rest (history,
+// sharing, the assistant, types, the journal, GitHub, Settings) stays in the full app.
+offerOnly([
+  ...["h1", "h2", "h3", "bullets", "numbers", "todo", "quote", "callout", "table", "code", "divider", "link", "tag", "status", "date", "toc", "time", "picture", "template", "property"].map((i) => `insert.${i}`),
+  ...["bold", "italic", "strikethrough", "highlight", "code", "link", "colour"].map((i) => `format.${i}`),
+  ...["source", "live", "split", "read", "bookmark", "unbookmark", "copylink", "rename", "icon", "cover", "foldheadings", "unfold", "wide", "narrow", "move"].map((i) => `note.${i}`),
+  "create.note",
+  "create.template",
+  ...["today", "find", "search", "tasks", "graph", "graph.here"].map((i) => `go.${i}`),
+  ...["files", "focus", "unfocus", "fullwidth", "normalwidth", "theme.auto", "theme.light", "theme.dark", "spelling.off", "spelling.on", "panel"].map((i) => `view.${i}`),
+  "help.open",
+  "help.shortcuts",
+]);
 
 const store = {
   get: (k: string) => {
@@ -39,33 +72,54 @@ const store = {
 };
 
 const useNotes = () => useSyncExternalStore(vault.subscribe, vault.allNotes);
+const useCurrent = () => useSyncExternalStore(vault.subscribe, vault.vaultId);
 const narrow = () => window.matchMedia("(max-width: 820px)").matches;
+const noop = () => {};
 
 export function App() {
   const notes = useNotes();
-  const [open, setOpen] = useState(vault.isOpen());
-  const [activeId, setActiveId] = useState<number | null>(null);
+  const vid = useCurrent();
+  const route = parseRoute(usePath());
+  // The welcome screen shows until a folder is open, and again to open another.
+  const [adding, setAdding] = useState(false);
   const [left, setLeft] = useState(() => !narrow());
   const [right, setRight] = useState(() => !narrow() && store.get("right") !== "0");
   const [switcher, setSwitcher] = useState(false);
+  const [palette, setPalette] = useState(false);
   const [tab, setTab] = useState<"files" | "search" | "tags">("files");
   const [query, setQuery] = useState("");
   const [ready, setReady] = useState(false);
+  const focus = useFocusMode();
+  const fullWidth = useFullWidth();
 
   useEffect(() => vault.onSaveError((e) => toastError(e)), []);
   useEffect(() => void requestAnimationFrame(() => setReady(true)), []);
+  // Each folder keeps its own bookmarks and saved searches (in this browser).
+  useEffect(() => {
+    if (!vid) return;
+    void loadBookmarks(vid);
+    void loadSavedSearches(vid);
+  }, [vid]);
+
+  const here = route.page !== "home" && "vaultId" in route && route.vaultId === vid ? route : null;
+  const activeId = here?.page === "note" ? here.noteId : null;
 
   const openNote = (n: NoteSummary | undefined) => {
     if (!n) return;
-    setActiveId(n.id);
+    navigate(noteUrl(vault.vaultId(), n.id));
     if (narrow()) setLeft(false);
   };
+  const go = (url: string) => (navigate(url), narrow() && setLeft(false));
 
-  async function opened() {
-    setOpen(true);
+  /** A folder became current: back to the note it was on, else its last changed note. */
+  function opened() {
+    setAdding(false);
+    setQuery("");
     const all = vault.allNotes();
     const last = all.find((n) => n.path === store.get(`last:${vault.vaultName()}`));
-    openNote(last ?? [...all].sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0]);
+    const n = last ?? [...all].sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
+    if (n) openNote(n);
+    else navigate(`/v/${vault.vaultId()}`);
   }
 
   useEffect(() => {
@@ -78,6 +132,34 @@ export function App() {
     if (!name) return;
     try {
       openNote(await vault.createNote(folder ? `${folder}/${name}` : name, ""));
+    } catch (e) {
+      toastError(e);
+    }
+  }
+
+  async function newFromTemplate() {
+    try {
+      const picked = await pickTemplate(vault.vaultId(), vault.allNotes());
+      if (!picked) return;
+      const title = await promptDialog({ title: "New note", message: `From the “${picked.note.title}” template`, label: "Title", value: "Untitled", action: "Create note" });
+      if (!title) return;
+      openNote(await vault.createNote(normalisePath(title), fillTemplate(picked.text, { title, date: new Date() })));
+    } catch (e) {
+      toastError(e);
+    }
+  }
+
+  /** A day's note in Daily/: open it, or make it (from Templates/Daily.md when there is one). */
+  async function daily(date = new Date()) {
+    const path = dailyPath(date);
+    const all = vault.allNotes();
+    const existing = all.find((n) => n.path.toLowerCase() === path.toLowerCase());
+    if (existing) return openNote(existing);
+    const tpl = dailyTemplatePath(all.map((n) => n.path));
+    const tplNote = tpl ? all.find((n) => n.path === tpl) : undefined;
+    const content = tplNote ? fillTemplate(vault.getNote(tplNote.id)?.content ?? "", { title: isoDay(date), date }) : defaultDaily(date);
+    try {
+      openNote(await vault.createNote(path, content));
     } catch (e) {
       toastError(e);
     }
@@ -99,15 +181,62 @@ export function App() {
     }
   }
 
-  // ⌘O opens a note by name, ⌘\ the file panel, ⌘S saves now.
+  const toggleRight = () => setRight((v) => (store.set("right", v ? "0" : "1"), !v));
+  const search = (q?: string) => (q !== undefined && setQuery(q), setLeft(true), setTab("search"));
+
+  // What the app can do, for ⌘K (web/lib/commands.ts). Server features are never offered
+  // (offerOnly above), so their actions are left empty.
+  const app: AppActions = {
+    canWrite: true,
+    findNote: () => setSwitcher(true),
+    search: () => search(),
+    graph: () => go(graphUrl(vid)),
+    graphHere: activeId ? () => go(graphUrl(vid, { note: activeId })) : null,
+    tasks: () => go(`/v/${vid}/tasks`),
+    journal: noop,
+    home: noop,
+    today: () => void daily(),
+    newNote: () => void newNote(),
+    newFromTemplate: () => void newFromTemplate(),
+    newTyped: noop,
+    newType: noop,
+    newBoard: noop,
+    saveLink: noop,
+    isAdmin: false,
+    trash: noop,
+    toggleLeft: () => setLeft((v) => !v),
+    toggleRight,
+    openNote: (t) => {
+      const hit = resolveLocal(vault.allNotes(), t);
+      if (hit) openNote(hit);
+      return hit?.title ?? null;
+    },
+    tour: noop,
+    askAi: noop,
+    importDayOne: noop,
+    reflect: noop,
+    addAssistant: noop,
+    exportHref: "",
+    vaultId: 0,
+    folders: false,
+    newGitVault: noop,
+    git: null,
+  };
+  useEffect(() => {
+    provide("app", vault.isOpen() ? app : null);
+  });
+
+  // ⌘K the palette, ⌘O opens a note by name, ⌘\ the file panel, ⌘S saves now, ⌘⇧F search.
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && document.documentElement.querySelector(".app.focus-mode") && !document.querySelector(".modal, .menu")) return setFocusMode(false);
       if (!(e.metaKey || e.ctrlKey) || !vault.isOpen()) return;
       const k = e.key.toLowerCase();
-      if (k === "o" || k === "p") (e.preventDefault(), setSwitcher(true));
+      if (k === "k") (e.preventDefault(), setPalette((x) => !x));
+      else if (k === "o" || k === "p") (e.preventDefault(), setSwitcher(true));
       else if (k === "\\") (e.preventDefault(), setLeft((v) => !v));
       else if (k === "s") (e.preventDefault(), void vault.flush());
-      else if (k === "f" && e.shiftKey) (e.preventDefault(), setLeft(true), setTab("search"));
+      else if (k === "f" && e.shiftKey) (e.preventDefault(), search());
     };
     window.addEventListener("keydown", on);
     return () => window.removeEventListener("keydown", on);
@@ -116,7 +245,7 @@ export function App() {
   // Unsaved work: writes still pending, or (without folder access) changes not downloaded.
   useEffect(() => {
     const on = (e: BeforeUnloadEvent) => {
-      if (vault.dirtyCount() === 0) return;
+      if (vault.dirtyCount(true) === 0) return;
       void vault.flush();
       e.preventDefault();
     };
@@ -126,25 +255,53 @@ export function App() {
 
   useAttachmentUrls();
 
-  if (!open) return <Welcome onOpened={() => void opened()} />;
+  if (!vid || adding) return <Welcome onOpened={opened} onBack={vid ? () => setAdding(false) : undefined} />;
+
+  async function close(id: number) {
+    const f = vault.openFolders().find((x) => x.id === id);
+    if (f && !f.writes && f.dirty) {
+      const ok = await confirmDialog({ title: `Close ${f.name}?`, message: `${f.dirty} changed note${f.dirty === 1 ? " hasn't" : "s haven't"} been downloaded, and will be lost.`, action: "Close", danger: true });
+      if (!ok) return;
+    }
+    await vault.closeFolder(id);
+    if (vault.isOpen()) opened();
+    else navigate("/");
+  }
 
   const active = notes.find((n) => n.id === activeId);
-  const cls = `app${left ? " left-open" : ""}${right && active ? " right-open" : ""}${ready ? " ready" : ""}`;
+  const page = here?.page === "graph" || here?.page === "tasks" ? here.page : null;
+  const showRight = right && !!active && !page;
+  const cls = `app${focus && active ? " focus-mode" : ""}${fullWidth ? " full-width" : ""}${left ? " left-open" : ""}${showRight ? " right-open" : ""}${ready ? " ready" : ""}`;
+  const asVault: Vault = { id: vid, name: vault.vaultName(), role: "editor", note_count: notes.length, member_count: 1 };
   return (
     <div className={cls}>
       <Sidebar
         notes={notes}
         activeId={activeId}
+        page={page}
         tab={tab}
         setTab={setTab}
         query={query}
         setQuery={setQuery}
         onOpen={openNote}
+        onGo={go}
+        onToday={() => void daily()}
         onNewNote={(f) => void newNote(f)}
-        onSwitch={() => (setOpen(false), setActiveId(null))}
+        onAdd={() => setAdding(true)}
+        onSwitch={(id) => (vault.switchTo(id), opened())}
+        onClose={(id) => void close(id)}
+        onSearch={search}
       />
-      {narrow() && (left || (right && active)) && <div className="scrim" onClick={() => (setLeft(false), setRight(false))} />}
-      {active ? (
+      {narrow() && (left || showRight) && <div className="scrim" onClick={() => (setLeft(false), setRight(false))} />}
+      {page === "graph" ? (
+        <main className="main">
+          <Graph vaultId={vid} vaultName={vault.vaultName()} notes={notes} leftOpen={left} onToggleLeft={() => setLeft((v) => !v)} rightOpen={false} onToggleRight={noop} />
+        </main>
+      ) : page === "tasks" ? (
+        <main className="main">
+          <TasksPage vault={asVault} notes={notes} leftOpen={left} onToggleLeft={() => setLeft((v) => !v)} rightOpen={false} onToggleRight={noop} onNavigate={() => narrow() && setLeft(false)} />
+        </main>
+      ) : active ? (
         <NoteScreen
           key={active.id}
           note={active}
@@ -152,11 +309,12 @@ export function App() {
           leftOpen={left}
           rightOpen={right}
           onToggleLeft={() => setLeft((v) => !v)}
-          onToggleRight={() => setRight((v) => (store.set("right", v ? "0" : "1"), !v))}
+          onToggleRight={toggleRight}
           onOpenLink={(t) => void openLink(t)}
           onOpen={openNote}
-          onTag={(t) => (setQuery(`#${t}`), setTab("search"), setLeft(true))}
-          onDeleted={() => setActiveId(null)}
+          onDaily={(d) => void daily(d)}
+          onTag={(t) => search(`#${t}`)}
+          onDeleted={() => navigate(`/v/${vid}`)}
         />
       ) : (
         <main className="main">
@@ -171,6 +329,7 @@ export function App() {
       {switcher && (
         <QuickSwitcher notes={notes} canCreate onPick={(n) => (setSwitcher(false), openNote(n))} onCreate={(t) => (setSwitcher(false), void openLink(t))} onClose={() => setSwitcher(false)} />
       )}
+      {palette && <CommandPalette onClose={() => setPalette(false)} />}
       <HelpHost />
       <Overlays />
     </div>
@@ -179,14 +338,15 @@ export function App() {
 
 // ── welcome ───────────────────────────────────────────────────────────────────────────
 
-function Welcome({ onOpened }: { onOpened: () => void }) {
-  const [last, setLast] = useState<FileSystemDirectoryHandle | null>(null);
+function Welcome({ onOpened, onBack }: { onOpened: () => void; onBack?: () => void }) {
+  const [known, setKnown] = useState<FileSystemDirectoryHandle[]>([]);
   const [busy, setBusy] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
   const filePicker = useRef<HTMLInputElement>(null);
   const folders = vault.supportsFolders();
+  const open = vault.openFolders();
 
-  useEffect(() => void vault.lastFolder().then(setLast), []);
+  useEffect(() => void vault.rememberedFolders().then(setKnown), []);
 
   async function run(f: () => Promise<void>) {
     setBusy(true);
@@ -202,12 +362,16 @@ function Welcome({ onOpened }: { onOpened: () => void }) {
   }
 
   const pickFolder = () => run(async () => vault.openFolder(await (window as any).showDirectoryPicker({ id: "commonplace", mode: "readwrite" })));
-  const reopen = () =>
+  const reopen = (dir: FileSystemDirectoryHandle) =>
     run(async () => {
-      const ok = (await (last as any).requestPermission({ mode: "readwrite" })) === "granted";
-      if (!ok) throw new Error("Commonplace needs permission to edit that folder.");
-      await vault.openFolder(last!);
+      const ok = (await (dir as any).requestPermission({ mode: "readwrite" })) === "granted";
+      if (!ok) throw new Error("DO Notes needs permission to edit that folder.");
+      await vault.openFolder(dir);
     });
+  const forget = async (dir: FileSystemDirectoryHandle) => {
+    await vault.forgetFolder(dir);
+    setKnown(await vault.rememberedFolders());
+  };
   const fromInput = (input: HTMLInputElement, label: string) => {
     const list = [...(input.files ?? [])];
     input.value = "";
@@ -228,25 +392,37 @@ function Welcome({ onOpened }: { onOpened: () => void }) {
       <div className="login-card standalone-welcome">
         <div className="brand">
           <Icon name="book" size={28} />
-          <h1>Commonplace</h1>
+          <h1>DO Notes</h1>
         </div>
-        <p className="muted">A Markdown editor for a folder of notes. Your files stay on this computer: nothing is uploaded.</p>
+        <p className="muted">A Markdown editor for folders of notes. Your files stay on this computer: nothing is uploaded.</p>
         {folders ? (
           <>
-            {last && (
-              <button className="primary" disabled={busy} onClick={() => void reopen()}>
-                <Icon name="folder" /> Reopen {last.name}
-              </button>
+            {known.length > 0 && (
+              <ul className="standalone-folders" aria-label="Folders opened before">
+                {known.map((d, i) => {
+                  const isOpen = open.some((f) => f.name === d.name);
+                  return (
+                    <li key={i}>
+                      <button className={i === 0 && !open.length ? "primary" : ""} disabled={busy} onClick={() => void reopen(d)}>
+                        <Icon name="folder" /> {isOpen ? `Go to ${d.name || "Folder"}` : `Reopen ${d.name || "Folder"}`}
+                      </button>
+                      <button className="icon-btn quiet" title={`Take ${d.name} off this list`} aria-label={`Take ${d.name} off this list`} onClick={() => void forget(d)}>
+                        <Icon name="x" size={14} />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
             )}
-            <button className={last ? "" : "primary"} disabled={busy} onClick={() => void pickFolder()}>
-              <Icon name="folder" /> Open a folder
+            <button className={known.length ? "" : "primary"} disabled={busy} onClick={() => void pickFolder()}>
+              <Icon name="folder" /> {open.length ? "Open another folder" : "Open a folder"}
             </button>
-            <p className="muted small">Changes are saved to the files as you type.</p>
+            <p className="muted small">Changes are saved to the files as you type. Open as many folders as you like: the switcher at the top of the file panel moves between them.</p>
           </>
         ) : (
           <>
             <button className="primary" disabled={busy} onClick={() => picker.current?.click()}>
-              <Icon name="folder" /> Open a folder
+              <Icon name="folder" /> {open.length ? "Open another folder" : "Open a folder"}
             </button>
             <button disabled={busy} onClick={() => filePicker.current?.click()}>
               <Icon name="file" /> Open files
@@ -264,9 +440,16 @@ function Welcome({ onOpened }: { onOpened: () => void }) {
         />
         <input ref={filePicker} type="file" hidden multiple accept=".md,text/markdown,image/*" onChange={(e) => fromInput(e.currentTarget, "Files")} />
         <p className="muted small">Or drop Markdown files here.</p>
-        <button className="quiet" onClick={() => openHelp("standalone")}>
-          <Icon name="help" size={16} /> How it works
-        </button>
+        <div className="row">
+          {onBack && (
+            <button className="quiet" onClick={onBack}>
+              <Icon name="chevron-left" size={16} /> Back to {vault.vaultName()}
+            </button>
+          )}
+          <button className="quiet" onClick={() => openHelp("standalone")}>
+            <Icon name="help" size={16} /> How it works
+          </button>
+        </div>
       </div>
       <HelpHost />
       <Overlays />
@@ -300,13 +483,19 @@ function buildTree(notes: NoteSummary[]): Tree {
 function Sidebar(p: {
   notes: NoteSummary[];
   activeId: number | null;
+  page: "graph" | "tasks" | null;
   tab: "files" | "search" | "tags";
   setTab: (t: "files" | "search" | "tags") => void;
   query: string;
   setQuery: (q: string) => void;
   onOpen: (n: NoteSummary) => void;
+  onGo: (url: string) => void;
+  onToday: () => void;
   onNewNote: (folder?: string) => void;
-  onSwitch: () => void;
+  onAdd: () => void;
+  onSwitch: (id: number) => void;
+  onClose: (id: number) => void;
+  onSearch: (q: string) => void;
 }) {
   const tree = useMemo(() => buildTree(p.notes), [p.notes]);
   const [openFolders, setOpenFolders] = useState<Set<string>>(() => new Set());
@@ -314,6 +503,10 @@ function Sidebar(p: {
   useSyncExternalStore(vault.subscribeStatus, vault.statusVersion);
   const dirty = vault.dirtyCount();
   const writes = vault.canWrite();
+  const vid = vault.vaultId();
+  const { ids } = useBookmarks();
+  const { list: searches } = useSavedSearches();
+  const marked = ids.map((id) => p.notes.find((n) => n.id === id)).filter(Boolean) as NoteSummary[];
 
   // The open note's folders open with it.
   useEffect(() => {
@@ -392,19 +585,40 @@ function Sidebar(p: {
   return (
     <nav className="sidebar">
       <div className="vault-switch standalone-vault">
-        <span className="standalone-vault-name" title={vault.vaultName()}>
-          <Icon name="folder" size={16} /> {vault.vaultName()}
-        </span>
+        {/* The collection switcher, as in the app: every open folder, then open or close one. */}
+        <select
+          value={vid}
+          aria-label="Collection"
+          title={vault.canWrite() ? vault.vaultName() : `${vault.vaultName()} (in this tab only)`}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v === "add") p.onAdd();
+            else if (v === "close") p.onClose(vid);
+            else p.onSwitch(Number(v));
+          }}
+        >
+          {vault.openFolders().map((f) => (
+            <option key={f.id} value={f.id}>
+              {f.name}
+            </option>
+          ))}
+          <option value="add">Open another folder…</option>
+          <option value="close">Close {vault.vaultName()}</option>
+        </select>
+        <ThemeButton />
         <button className="icon-btn" onClick={() => openHelp()} title="Help" aria-label="Help">
           <Icon name="help" />
-        </button>
-        <button className="icon-btn" onClick={p.onSwitch} title="Open another folder" aria-label="Open another folder">
-          <Icon name="vault" />
         </button>
       </div>
       <div className="sidebar-actions">
         <button onClick={() => p.onNewNote()}>
           <Icon name="plus" size={16} /> New note
+        </button>
+        <button onClick={p.onToday} title="Today's note, in Daily/">
+          <Icon name="calendar" size={16} /> Today
+        </button>
+        <button onClick={() => p.onGo(graphUrl(vid))} title="Graph view" className={p.page === "graph" ? "on" : ""}>
+          <Icon name="graph" size={16} /> Graph
         </button>
       </div>
       <div className="tabs">
@@ -415,7 +629,57 @@ function Sidebar(p: {
         ))}
       </div>
       <div className="sidebar-scroll">
-        {p.tab === "files" && (p.notes.length ? <ul className="tree">{render(tree, 0)}</ul> : <div className="muted pad">No notes yet. Make one with New note.</div>)}
+        {p.tab === "files" && (
+          <>
+            <div className="types-section shortcuts">
+              <ul className="types-list">
+                <li>
+                  <button className={`type-row${p.page === "tasks" ? " active" : ""}`} onClick={() => p.onGo(`/v/${vid}/tasks`)}>
+                    <Icon name="check" size={16} />
+                    <span className="type-row-name">Tasks</span>
+                  </button>
+                </li>
+              </ul>
+              {marked.length > 0 && (
+                <>
+                  <div className="section-head">Bookmarks</div>
+                  <ul className="types-list">
+                    {marked.map((n) => (
+                      <li key={n.id}>
+                        <button className={`type-row${n.id === p.activeId ? " active" : ""}`} onClick={() => p.onOpen(n)}>
+                          <Icon name="bookmark" size={16} />
+                          <span className="type-row-name">{n.title}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {searches.length > 0 && (
+                <>
+                  <div className="section-head">Saved searches</div>
+                  <ul className="types-list">
+                    {searches.map((s) => (
+                      <li key={s.id} className="saved-search">
+                        <button className="type-row" onClick={() => p.onSearch(s.query)} title={`Search for ${s.query}`}>
+                          <Icon name="search" size={16} />
+                          <span className="type-row-name">{s.query}</span>
+                        </button>
+                        <button className="quiet icon-btn saved-search-graph" aria-label={`Graph of ${s.query}`} title="Show these notes in the graph" onClick={() => p.onGo(graphUrl(vid, { search: s.query }))}>
+                          <Icon name="graph" size={14} />
+                        </button>
+                        <button className="quiet icon-btn saved-search-x" aria-label={`Remove the saved search ${s.query}`} title="Remove" onClick={() => removeSearch(vid, s)}>
+                          <Icon name="x" size={14} />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+            {p.notes.length ? <ul className="tree">{render(tree, 0)}</ul> : <div className="muted pad">No notes yet. Make one with New note.</div>}
+          </>
+        )}
         {p.tab === "search" && <Search notes={p.notes} query={p.query} setQuery={p.setQuery} onOpen={p.onOpen} />}
         {p.tab === "tags" && (
           <ul className="tag-list">
@@ -450,37 +714,32 @@ function Sidebar(p: {
   );
 }
 
-const escHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
-
-/** Every word must appear (a #tag must be one of the note's tags); title matches first. */
+/** Every word must appear (a #tag must be one of the note's tags); title matches first. A search
+ *  can be kept in the file panel, under Saved searches. */
 function Search(p: { notes: NoteSummary[]; query: string; setQuery: (q: string) => void; onOpen: (n: NoteSummary) => void }) {
   // Typing in the box stays quick: the search over every note runs behind it.
   const query = useDeferredValue(p.query);
-  const hits = useMemo(() => {
-    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-    if (!words.length) return [];
-    const out: { n: NoteSummary; score: number; snippet: string }[] = [];
-    for (const n of p.notes) {
-      const lower = vault.lowerOf(n.id);
-      const title = n.title.toLowerCase();
-      if (!words.every((w) => (w.startsWith("#") ? n.tags.includes(w.slice(1)) : lower.includes(w) || title.includes(w)))) continue;
-      const first = words.find((w) => !w.startsWith("#"));
-      const at = first ? lower.indexOf(first) : -1;
-      let snippet = "";
-      if (at >= 0) {
-        const start = Math.max(0, at - 40);
-        const raw = (vault.getNote(n.id)?.content ?? "").slice(start, at + 80).replace(/\s+/g, " ");
-        snippet = (start ? "…" : "") + escHtml(raw).replace(new RegExp(first!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), (m) => `<mark>${m}</mark>`);
-      }
-      out.push({ n, score: words.filter((w) => title.includes(w)).length, snippet });
-    }
-    return out.sort((a, b) => b.score - a.score || b.n.updated_at.localeCompare(a.n.updated_at)).slice(0, 100);
-  }, [query, p.notes]);
+  const hits = useMemo(() => searchNotes(p.notes, query), [query, p.notes]);
+  const { list } = useSavedSearches();
+  const saved = list.find((s) => s.query === p.query.trim()) ?? null;
+  const vid = vault.vaultId();
 
   return (
     <div className="search-panel">
-      <input autoFocus type="search" placeholder="Search notes" aria-label="Search notes" value={p.query} onChange={(e) => p.setQuery(e.target.value)} />
-      {p.query.trim() && <div className="search-meta muted">{hits.length === 0 ? "No notes match." : `${hits.length} note${hits.length === 1 ? "" : "s"}`}</div>}
+      <input autoFocus type="search" placeholder="Search notes" aria-label="Search notes" value={p.query} onChange={(e) => p.setQuery(e.target.value)} enterKeyHint="search" />
+      {p.query.trim() && (
+        <div className="search-meta muted">
+          <span>{hits.length === 0 ? "No notes match." : `${hits.length} note${hits.length === 1 ? "" : "s"}`}</span>
+          <button
+            className={`quiet search-save${saved ? " on" : ""}`}
+            aria-pressed={!!saved}
+            title={saved ? "Remove from the file panel" : "Keep this search in the file panel"}
+            onClick={() => (saved ? removeSearch(vid, saved) : saveSearch(vid, p.query))}
+          >
+            <Icon name="bookmark" size={14} /> {saved ? "Saved" : "Save"}
+          </button>
+        </div>
+      )}
       <ul className="search-results">
         {hits.map(({ n, snippet }) => (
           <li key={n.id}>
@@ -498,6 +757,18 @@ function Search(p: { notes: NoteSummary[]; query: string; setQuery: (q: string) 
 
 // ── the note ──────────────────────────────────────────────────────────────────────────
 
+/** The note's text as a Yjs document for the app's editor, which edits one: kept in this tab
+ *  only (there's no one to share it with), and made again from the file's text when something
+ *  else changes the note (a task ticked elsewhere, a link rewritten by a rename). */
+function useLocalDoc(id: number, generation: number) {
+  return useMemo(() => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText("content");
+    ytext.insert(0, vault.getNote(id)?.content ?? "");
+    return { ytext, awareness: new Awareness(doc) };
+  }, [id, generation]);
+}
+
 function NoteScreen(p: {
   note: NoteSummary;
   notes: NoteSummary[];
@@ -507,6 +778,7 @@ function NoteScreen(p: {
   onToggleRight: () => void;
   onOpenLink: (target: string) => void;
   onOpen: (n: NoteSummary) => void;
+  onDaily: (d: Date) => void;
   onTag: (tag: string) => void;
   onDeleted: () => void;
 }) {
@@ -516,20 +788,42 @@ function NoteScreen(p: {
   const mode: Mode = isNarrow && saved === "split" ? "edit" : saved;
   const [text, setText] = useState(() => vault.getNote(p.note.id)?.content ?? "");
   const [renaming, setRenaming] = useState(false);
+  const [generation, setGeneration] = useState(0);
   const editor = useRef<EditorHandle>(null);
   const preview = useRef<HTMLDivElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
   const notesRef = useRef(p.notes);
   notesRef.current = p.notes;
+  const focusMode = useFocusMode();
+  const fullWidth = useFullWidth();
+  useBookmarks();
+  const vid = vault.vaultId();
+  const { ytext, awareness } = useLocalDoc(p.note.id, generation);
+
+  // Typing changes the document; the folder keeps the text, and the preview follows it.
+  useEffect(() => {
+    const on = () => {
+      const t = ytext.toString();
+      setText(t);
+      vault.setContent(p.note.id, t);
+    };
+    ytext.observe(on);
+    return () => (ytext.unobserve(on), awareness.destroy());
+  }, [ytext]);
 
   const setModeSaved = (m: Mode) => (setMode(m), store.set("mode", m));
   const folder = p.note.path.includes("/") ? p.note.path.replace(/\/[^/]+$/, "") : "";
   const showPreview = mode === "split" || mode === "read";
   // The preview follows the text a moment behind, so a long note doesn't slow typing.
   const shown = useDeferredValue(text);
-  const html = useMemo(() => (showPreview ? renderMarkdown(shown, vault.VAULT_ID, p.notes) : ""), [showPreview, shown, p.notes]);
+  const html = useMemo(() => (showPreview ? renderMarkdown(shown, vid, p.notes) : ""), [showPreview, shown, p.notes]);
+  const icon = emojiIcon(p.note.icon);
+  const cover = coverSrc(vid, p.note.cover);
+  const day = dailyDate(p.note.path);
+  const tags = useMemo(() => [...new Set(p.notes.flatMap((n) => n.tags))].sort(), [p.notes]);
 
   useEffect(() => {
-    if (preview.current) hydrate(preview.current, { vaultId: vault.VAULT_ID, notes: p.notes, ancestors: [p.note.id], onOpen: p.onOpenLink });
+    if (preview.current) hydrate(preview.current, { vaultId: vid, notes: p.notes, ancestors: [p.note.id], onOpen: p.onOpenLink });
   }, [html]);
 
   // Dataview results follow the folder: again a moment after typing, or when notes change.
@@ -537,21 +831,17 @@ function NoteScreen(p: {
     const t = setTimeout(refreshDataview, 600);
     return () => clearTimeout(t);
   }, [text, p.notes]);
-  // A task ticked in a Dataview result may be in this note: start the editor from the new text.
+  // Something else changed this note: start the editor again from the new text.
   useEffect(() => {
     const on = (e: Event) => {
       if ((e as CustomEvent).detail !== p.note.id) return;
       setText(vault.getNote(p.note.id)?.content ?? "");
-      setEditorKey((k) => k + 1);
+      setGeneration((g) => g + 1);
     };
     window.addEventListener("cp-note-replaced", on);
     return () => window.removeEventListener("cp-note-replaced", on);
   }, [p.note.id]);
-
-  function onChange(t: string) {
-    setText(t);
-    vault.setContent(p.note.id, t);
-  }
+  useEffect(() => void (generation === 0 && setTimeout(() => editor.current?.restorePlace())), []);
 
   function onPreviewClick(e: React.MouseEvent) {
     const el = e.target as HTMLElement;
@@ -559,9 +849,9 @@ function NoteScreen(p: {
       e.preventDefault();
       const next = toggleTask(text, Number(el.dataset.task));
       if (next !== null) {
-        onChange(next);
-        // The editor holds its own copy: start it again from the new text.
-        setEditorKey((k) => k + 1);
+        vault.setContent(p.note.id, next);
+        setText(next);
+        setGeneration((g) => g + 1);
       }
       return;
     }
@@ -570,7 +860,8 @@ function NoteScreen(p: {
     if (a.dataset.target) (e.preventDefault(), p.onOpenLink(a.dataset.target));
     else if (a.dataset.tag) (e.preventDefault(), p.onTag(a.dataset.tag));
   }
-  const [editorKey, setEditorKey] = useState(0);
+
+  const renamed = (r: { relinked: number }) => r.relinked && toast(`Updated the links in ${r.relinked} note${r.relinked === 1 ? "" : "s"}`);
 
   async function rename(title: string) {
     setRenaming(false);
@@ -578,7 +869,7 @@ function NoteScreen(p: {
     if (!t || t === p.note.title) return;
     if (t.includes("/")) return toast("A title can't contain /.", { tone: "error" });
     try {
-      await vault.renameNote(p.note.id, folder ? `${folder}/${t}` : t);
+      renamed(await vault.renameNote(p.note.id, folder ? `${folder}/${t}` : t));
     } catch (e) {
       toastError(e);
     }
@@ -594,7 +885,7 @@ function NoteScreen(p: {
     });
     if (!to) return;
     try {
-      await vault.renameNote(p.note.id, to);
+      renamed(await vault.renameNote(p.note.id, to));
     } catch (e) {
       toastError(e);
     }
@@ -616,6 +907,49 @@ function NoteScreen(p: {
     }
   }
 
+  async function insertTemplate() {
+    try {
+      const picked = await pickTemplate(vid, p.notes);
+      if (picked) editor.current?.insertTemplate(fillTemplate(picked.text, { title: p.note.title, date: new Date() }));
+    } catch (e) {
+      toastError(e);
+    }
+  }
+
+  // What this note can do, for the ⋯ menu, ⌘K and the / menu (web/lib/commands.ts).
+  const actions: NoteActions = {
+    aixfId: null,
+    readOnly: false,
+    mode,
+    narrow: isNarrow,
+    get editor() {
+      return editor.current;
+    },
+    downloadHref: "",
+    setMode: setModeSaved,
+    history: noop,
+    copyLink: () => void navigator.clipboard?.writeText(`[[${p.note.title}]]`).then(() => toast("Wikilink copied"), toastError),
+    rename: () => setRenaming(true),
+    moveTo: () => void move(),
+    sendTo: noop,
+    canSend: false,
+    trash: () => void remove(),
+    pickPicture: () => picker.current?.click(),
+    insertTemplate: () => void insertTemplate(),
+    askHere: noop,
+    bookmark: () => void toggleBookmark(vid, p.note.id, p.note.title),
+    bookmarked: isBookmarked(p.note.id),
+    makeTyped: noop,
+    vaultId: vid,
+    look: { icon, cover: p.note.cover ?? null, width: p.note.width ?? null },
+  };
+  useEffect(() => {
+    provide("note", actions);
+    return () => {
+      if (currentCtx().note === actions) provide("note", null);
+    };
+  });
+
   const outline = useMemo(() => headings(text), [text]);
   const outgoing = useMemo(
     () => [
@@ -627,19 +961,12 @@ function NoteScreen(p: {
     ],
     [text],
   );
-  const backlinks = useMemo(
-    () =>
-      p.notes.filter((n) => {
-        if (n.id === p.note.id) return false;
-        return vault.linksOf(n.id).some((t) => resolveLocal(p.notes, t)?.id === p.note.id);
-      }),
-    [p.notes, p.note.id],
-  );
+  const backlinks = useMemo(() => vault.backlinksOf(p.note.id), [p.notes, p.note.id]);
 
   return (
     <>
       <main className="main">
-        <div className={`note-view mode-${mode}`}>
+        <div className={`note-view mode-${mode}${p.note.width ? ` width-${p.note.width}` : ""}`}>
           <header className="note-header">
             <PanelToggle side="left" open={p.leftOpen} onToggle={p.onToggleLeft} />
             <div className="note-title-wrap">
@@ -658,6 +985,7 @@ function NoteScreen(p: {
                 />
               ) : (
                 <h1 className="note-title">
+                  {icon && <span className="note-icon">{icon}</span>}
                   <button type="button" className="title-button" onClick={() => setRenaming(true)} title="Rename" aria-label={`Rename “${p.note.title}”`}>
                     {p.note.title}
                   </button>
@@ -665,6 +993,21 @@ function NoteScreen(p: {
               )}
             </div>
             <div className="note-actions">
+              {focusMode && (
+                <button className="quiet focus-exit" onClick={() => setFocusMode(false)} title="Leave focus mode (Esc)">
+                  Leave focus
+                </button>
+              )}
+              {day && (
+                <div className="day-nav">
+                  <button className="icon-btn" onClick={() => p.onDaily(addDays(day, -1))} aria-label={`Previous day, ${formatDate(addDays(day, -1), "dddd D MMMM")}`} title="Previous day">
+                    <Icon name="chevron-left" />
+                  </button>
+                  <button className="icon-btn" onClick={() => p.onDaily(addDays(day, 1))} aria-label={`Next day, ${formatDate(addDays(day, 1), "dddd D MMMM")}`} title="Next day">
+                    <Icon name="chevron" />
+                  </button>
+                </div>
+              )}
               {isNarrow ? (
                 <button
                   className="icon-btn"
@@ -690,35 +1033,70 @@ function NoteScreen(p: {
                   ))}
                 </div>
               )}
+              {!isNarrow && (
+                <button
+                  className={`icon-btn${fullWidth ? " on" : ""}`}
+                  onClick={() => setFullWidth(!fullWidth)}
+                  aria-pressed={fullWidth}
+                  aria-label="Full-width editor"
+                  title={fullWidth ? "Normal editor width" : "Full-width editor"}
+                >
+                  <Icon name="width" />
+                </button>
+              )}
               <Menu
                 label="More"
-                items={[
-                  ...(isNarrow
-                    ? [{ label: mode === "source" ? "Live preview" : "Source mode", icon: mode === "source" ? "edit" : "code", onSelect: () => setModeSaved(mode === "source" ? "edit" : "source") }]
-                    : []),
-                  { label: "Rename", icon: "edit", onSelect: () => setRenaming(true) },
-                  { label: "Move to…", icon: "folder", onSelect: () => void move() },
+                items={() => [
+                  ...noteMenu().map((c) => ({ label: c.title, icon: c.icon, danger: c.danger, onSelect: () => c.run(currentCtx()) })),
                   { label: "Delete", icon: "trash", danger: true, onSelect: () => void remove() },
                 ]}
               />
               <PanelToggle side="right" open={p.rightOpen} onToggle={p.onToggleRight} />
             </div>
           </header>
+          {focusMode && isNarrow && (
+            <button className="focus-exit-float" onClick={() => setFocusMode(false)}>
+              Leave focus
+            </button>
+          )}
+          {cover && (
+            <div className="note-cover">
+              <img src={cover} alt="" referrerPolicy="no-referrer" />
+            </div>
+          )}
           <div className="note-body">
             <div className="pane edit-pane" hidden={mode === "read"}>
               <Editor
-                key={editorKey}
+                key={generation}
                 ref={editor}
-                noteId={p.note.id}
-                initial={vault.getNote(p.note.id)?.content ?? ""}
+                ytext={ytext}
+                awareness={awareness}
+                readOnly={false}
                 livePreview={mode === "edit"}
+                vaultId={vid}
                 notes={() => notesRef.current}
-                onChange={onChange}
-                onOpenLink={p.onOpenLink}
+                notesVersion={p.notes}
+                tags={() => tags}
+                onOpenLink={(target) => p.onOpenLink(target)}
+                noteId={p.note.id}
+                typewriter={focusMode}
+                placeKey={`standalone:${vault.vaultName()}:${p.note.path}`}
               />
             </div>
             {showPreview && <div className="pane preview markdown" ref={preview} onClick={onPreviewClick} dangerouslySetInnerHTML={{ __html: html }} />}
           </div>
+          <input
+            ref={picker}
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            onChange={(e) => {
+              const files = [...(e.currentTarget.files ?? [])];
+              e.currentTarget.value = "";
+              if (files.length) editor.current?.insertFiles(files);
+            }}
+          />
         </div>
       </main>
       <aside className="right-panel" aria-label="Links and outline">
@@ -775,25 +1153,26 @@ function NoteScreen(p: {
 
 // ── attachments ───────────────────────────────────────────────────────────────────────
 
-const SERVED = `/api/vaults/${vault.VAULT_ID}/files?path=`;
+const SERVED = /^\/api\/vaults\/(\d+)\/files\?path=/;
 
 /** The shared renderer points images at the server's file route; point them at the folder's
- *  files instead, wherever they appear (preview, Live Preview widgets, embeds). */
+ *  files instead, wherever they appear (preview, Live Preview widgets, embeds, covers). */
 function useAttachmentUrls() {
   useEffect(() => {
     const fix = (el: Element) => {
       for (const attr of ["src", "href"]) {
         const v = el.getAttribute(attr);
-        if (!v?.startsWith(SERVED)) continue;
-        const path = decodeURIComponent(v.slice(SERVED.length));
+        const m = v ? SERVED.exec(v) : null;
+        if (!m) continue;
+        const path = decodeURIComponent(v!.slice(m[0].length));
         el.setAttribute(attr, "");
-        void vault.attachmentUrl(path).then((url) => {
+        void vault.attachmentUrl(path, Number(m[1])).then((url) => {
           if (url) el.setAttribute(attr, url);
           else if (el instanceof HTMLImageElement) el.alt = `${path} isn't in this folder`;
         });
       }
     };
-    const scan = (root: ParentNode) => root.querySelectorAll(`[src^="${SERVED}"], [href^="${SERVED}"]`).forEach(fix);
+    const scan = (root: ParentNode) => root.querySelectorAll(`[src^="/api/vaults/"], [href^="/api/vaults/"]`).forEach(fix);
     const mo = new MutationObserver((records) => {
       for (const r of records) {
         if (r.type === "attributes") fix(r.target as Element);

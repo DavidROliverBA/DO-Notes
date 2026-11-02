@@ -36,7 +36,8 @@ export function DailyCalendar({ notes, selected, onPick }: { notes: NoteSummary[
           <Icon name="chevron" size={16} />
         </button>
       </div>
-      <div className="calendar-grid" role="grid">
+      {/* A group of day buttons, not an ARIA grid: a grid needs rows and cells to be correct. */}
+      <div className="calendar-grid" role="group" aria-label={formatDate(month, "MMMM YYYY")}>
         {WEEK.map((w, i) => (
           <span key={i} className="calendar-dow">
             {w}

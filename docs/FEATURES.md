@@ -1,6 +1,6 @@
 # Features
 
-Everything Commonplace does, in one list. The [README](../README.md) has the short version, the
+Everything DO Notes does, in one list. The [README](../README.md) has the short version, the
 [help](help/index.md) shows how to use each part, and [ARCHITECTURE.md](ARCHITECTURE.md) explains how
 it's built.
 
@@ -32,7 +32,11 @@ it's built.
   blocks, and a `+` / `⋮⋮` handle beside each block inserts below it, turns it into another kind,
   colours, duplicates or deletes it, and drags it (a list item with its children) to a new place.
   Source mode (`</>`) shows plain markdown; reading view is
-  read-only.
+  read-only. Code blocks are coloured by language, with a language picker and Copy; a picture
+  opens on its own with a click; `[[` suggests a note's headings and aliases; a pasted picture
+  is named after its note; a word count sits at the bottom of the note; and each note reopens
+  where you left it. Headings and list items fold away, resting on a link previews the
+  note, and selecting words on a laptop shows a format bar (⌘B, ⌘I, ⌘⇧X and ⌘E toggle too).
 - **Live collaboration:** Yjs CRDTs over WebSockets. Edits merge character by character, you see
   other people's cursors and selections and who is in the note, and undo only undoes your own
   changes. A phone that edits offline merges cleanly when it reconnects.
@@ -52,6 +56,14 @@ it's built.
   note shows its type's properties with the right editor (a relation picks a note of the right
   type), and the other side sees it: Sam's panel says "As attendees: Kickoff". Daily notes list
   what was made and changed that day. All plain, portable markdown.
+- **Writing blocks (F28):** callouts that open and close (`> [!note]-`), coloured status labels
+  (`:status[On track]{.green}`), a table of contents (`[TOC]`), `//` to pick a date, `:rocket`
+  for emoji, a note's emoji icon, cover picture and wide page, and link cards for a web address
+  on its own line, all plain Markdown.
+- **Relationships (F27):** any note can say how it relates to another with AI-XF's relationships
+  (Part of, Depends on, Supersedes, References…): **Add relationship** writes
+  `part-of: "[[Onboarding]]"`, and the other note's side panel lists it the other way round
+  (*Has part*). Pages of a guide say they're part of it, with no page tree.
 - **Notes inside notes:** `![[Note]]` shows that note in place, and `![[Note#Heading]]` just that
   section, in Live Preview and reading view, three deep, with loops cut off. A link to a typed
   note on a line of its own shows as a card with its type and key properties (each type can turn
@@ -139,7 +151,11 @@ it's built.
 - **Works offline:** a service worker keeps the app and what it needs to open, and every note you
   open is kept on the device (its CRDT state in IndexedDB), so the home-screen app opens with no
   signal, notes take edits, and they merge when it reconnects. Signing out forgets it all.
+- **Guided tour:** a minute's walk round the screen, a step at a time, pointing at each part
+  (laptop and iPhone paths), offered once on the home page and again from ⌘K; **What's new**
+  shows what's been added since this device last looked.
 - **Panels you can size:** drag the inner edge of the file panel or the side panel; double-click
-  puts it back.
+  puts it back. A full-width editor (the ↔ button, ⌘K or Settings) lets notes fill the space
+  between the panels, following them as they change.
 - **Phone-ready:** drawers instead of side panels, a header that tucks away as you scroll, a formatting bar above the keyboard, safe-area
   insets, dark mode, and installable to the home screen.

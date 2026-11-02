@@ -209,3 +209,22 @@
     box-shadow: var(--shadow);
   }
 }
+
+/* Searching on a phone: while the search box has focus or words in it, the panel above it (the
+   collection, the GitHub bar, New and Today) folds away, so the box is at the top, clear of the
+   keyboard and the bar iOS floats above it, and the results get the height. The tabs stay. */
+@media (max-width: 820px) {
+  .sidebar:has(.search-panel input:focus, .search-panel input:not(:placeholder-shown)) > :not(.tabs, .sidebar-scroll) {
+    display: none;
+  }
+}
+
+/* A text box being typed in keeps clear of iOS's ˄ ˅ ✓ bar: web/main.tsx scrolls it into view
+   with this much room under it. */
+@media (pointer: coarse) {
+  input,
+  textarea,
+  select {
+    scroll-margin-bottom: var(--keyboard-bar);
+  }
+}

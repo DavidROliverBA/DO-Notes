@@ -1,8 +1,8 @@
-# Commonplace
+# DO Notes
 
 **A Markdown knowledge base that several people can share, that works on your phone, and that you can always take with you as plain Markdown.**
 
-![Commonplace on a laptop in dark mode, with the file panel, a note with properties, tasks and a callout, and the graph in the side panel; beside it the same note on an iPhone in light mode](docs/images/hero.webp)
+![DO Notes on a laptop in dark mode, with the file panel, a note with properties, tasks and a callout, and the graph in the side panel; beside it the same note on an iPhone in light mode](docs/images/hero.webp)
 
 Write in Markdown with `[[wikilinks]]`, `#tags` and properties. Edit the same note at the same time
 as other people, with live cursors. Find anything by keyword or meaning. See how your notes connect
@@ -22,7 +22,7 @@ that other Markdown editors open as they are.
 | 🤖 **Your own AI** | Bring an Anthropic, OpenAI, relaxAI or compatible key. It searches your notes, writes and files pages, and asks before it changes anything. Costs shown in £, with a daily limit. Or connect Claude over MCP. |
 | 🐙 **GitHub** | Open a repository of Markdown as a collection. Your edits become a branch, with Review changes, Update from main and Open pull request, sent automatically if you like. |
 | 🌍 **Publish** | Turn a collection, or chosen folders, into a website with a page list, contents, backlinks and tag pages. It's a snapshot, so later edits stay private until you publish again. |
-| 📱 **iPhone** | Installs to the home screen, works offline, has a formatting bar above the keyboard, and has a Save to Commonplace shortcut in the share sheet. |
+| 📱 **iPhone** | Installs to the home screen, works offline, has a formatting bar above the keyboard, and has a Save to DO Notes shortcut in the share sheet. |
 | 📄 **One file** | [A standalone version](standalone/README.md): one HTML file that edits a folder of Markdown files, with no server. |
 
 The full list is in [docs/FEATURES.md](docs/FEATURES.md).
@@ -87,10 +87,12 @@ If the embedding provider fails, search falls back to keywords and saving is nev
 
 ## Connect things
 
-- **Claude (MCP):** Settings → Connections → Connect Claude makes a token. After one `claude mcp add` command,
-  Claude Code can search, read and write your notes as you. See [docs/MCP.md](docs/MCP.md).
+- **Claude (MCP):** add DO Notes as a custom connector in claude.ai (the address is in Settings →
+  Connections → Connect Claude), sign in and allow it; the Claude iPhone and desktop apps then
+  have it too. Claude Code can sign in the same way or use a token. Either way Claude searches,
+  reads and writes your notes as you. See [docs/MCP.md](docs/MCP.md).
 - **Share from the iPhone:** Settings → Connections → Share from iPhone makes a token for an Apple
-  Shortcut, so **Save to Commonplace** shows in every app's share sheet. Links, text and photos go
+  Shortcut, so **Save to DO Notes** shows in every app's share sheet. Links, text and photos go
   to an inbox note. See [docs/IPHONE-SHORTCUT.md](docs/IPHONE-SHORTCUT.md).
 - **Keys:** `⌘K` lists every command, `⌘O` opens a note by name and `⌘J` opens the AI. The rest are
   in [the shortcuts page](docs/help/shortcuts.md).
@@ -150,5 +152,6 @@ co-editing, using the stock `y-websocket` client.
 
 ## Licence
 
-[MIT](LICENSE). Commonplace is built on open-source packages, each under its own licence:
+DO Notes is a personal project, not a commercial product: use it, change it and share it under the
+[MIT licence](LICENSE). It is built on open-source packages, each under its own licence:
 see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

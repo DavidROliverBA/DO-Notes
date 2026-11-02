@@ -102,6 +102,44 @@ export function linkTargets(value: unknown): string[] {
   return out;
 }
 
+// ── relationships (F27, AI-XF §6.2) ─────────────────────────────────────────────────────────
+//
+// Any note can say how it relates to another with a property named after an AI-XF rel, its value
+// a link: `part-of: "[[Onboarding]]"`, `depends-on: ["[[Payroll]]", "[[IT accounts]]"]`. It's the
+// same one way to write relations as a type's (`attendees`), so nothing new is stored; the other
+// note shows the inverse ("Has part"), and an AI-XF export writes each as a typed link.
+
+export interface Rel {
+  rel: string;
+  /** How the note that says it reads: "Part of". */
+  label: string;
+  /** How the note it points at reads (AI-XF's inverse): "Has part". */
+  inverse: string;
+  hint: string;
+}
+
+/** AI-XF's core vocabulary, less the ones its tools write (merged-into, split-from, imported). */
+export const RELS: Rel[] = [
+  { rel: "part-of", label: "Part of", inverse: "Has part", hint: "Belongs inside it: a page of a guide, a step of a process" },
+  { rel: "has-part", label: "Has part", inverse: "Part of", hint: "Contains it" },
+  { rel: "depends-on", label: "Depends on", inverse: "Depended on by", hint: "Needs it to work" },
+  { rel: "references", label: "References", inverse: "Referenced by", hint: "Cites or points at it" },
+  { rel: "derived-from", label: "Derived from", inverse: "Source of", hint: "Was made from it" },
+  { rel: "supersedes", label: "Supersedes", inverse: "Superseded by", hint: "Replaces it" },
+  { rel: "superseded-by", label: "Superseded by", inverse: "Supersedes", hint: "Is replaced by it" },
+  { rel: "supports", label: "Supports", inverse: "Supported by", hint: "Is evidence for it" },
+  { rel: "contradicts", label: "Contradicts", inverse: "Contradicts", hint: "Disagrees with it" },
+  { rel: "describes", label: "Describes", inverse: "Described by", hint: "Explains or documents it" },
+  { rel: "authored-by", label: "Authored by", inverse: "Author of", hint: "Who wrote it" },
+  { rel: "relates-to", label: "Relates to", inverse: "Relates to", hint: "Connected, nothing more specific" },
+];
+
+/** The relationship a property key names (`part-of`, `Part of`), or null. */
+export function relNamed(key: string): Rel | null {
+  const k = key.trim().toLowerCase().replace(/[\s_]+/g, "-");
+  return RELS.find((r) => r.rel === k) ?? null;
+}
+
 // ── editing types ──────────────────────────────────────────────────────────────────────────
 
 /** The part of a type that the type editor changes. */
@@ -335,6 +373,64 @@ STARTERS.push(
   },
 );
 
+// Architecture: the types Floe's "folder of notes" export writes (`type: system`, matched without
+// case), with the properties it writes, so an imported landscape gets forms, tables and graph
+// colours. `part-of` is a relationship (F27), not a property here. Values stay as Floe writes them
+// (lower case), so a re-export lines up.
+const floeStatus = prop("status", "select", { options: ["live", "future", "deprecated", "removed"] });
+const floeFacts = [
+  prop("classification", "select", { options: ["public", "internal", "confidential", "restricted"] }),
+  prop("personal-data", "checkbox"),
+  prop("payment-data", "checkbox"),
+  prop("criticality", "select", { options: ["low", "medium", "high", "critical"] }),
+];
+const floeId = prop("floe-id", "text");
+const floeBuilt = [prop("technologies", "list"), prop("owner", "text"), floeStatus, prop("external", "checkbox"), ...floeFacts, floeId];
+STARTERS.push(
+  {
+    name: "Landscape",
+    about: "One architecture model from Floe: its people and systems, with diagrams and decisions beside them.",
+    shape: { icon: "graph", colour: "grey", properties: [] },
+    template: "# {{title}}\n\n## Systems\n\n## Diagrams\n\n## Decisions\n",
+  },
+  {
+    name: "Domain",
+    about: "A business area that groups systems, on the estate view.",
+    shape: { icon: "globe", colour: "grey", properties: [prop("owner", "text"), floeStatus, floeId] },
+    template: "# {{title}}\n\n## Contains\n",
+  },
+  {
+    name: "Actor",
+    about: "A person or role that uses the systems.",
+    shape: { icon: "user", colour: "blue", properties: [prop("external", "checkbox"), floeId] },
+    template: "# {{title}}\n\n## Uses\n",
+  },
+  {
+    name: "System",
+    about: "Software that delivers value on its own: what it does, who owns it, and what it holds.",
+    shape: { icon: "shapes", colour: "purple", properties: floeBuilt },
+    template: "# {{title}}\n\n## Contains\n\n## Uses\n\n## Used by\n",
+  },
+  {
+    name: "App",
+    about: "Something that runs inside a system: a service, a web app, a job.",
+    shape: { icon: "settings", colour: "green", properties: floeBuilt },
+    template: "# {{title}}\n\n## Uses\n\n## Used by\n",
+  },
+  {
+    name: "Store",
+    about: "Where a system keeps data: a database, a bucket, a queue.",
+    shape: { icon: "vault", colour: "amber", properties: floeBuilt },
+    template: "# {{title}}\n\n## Used by\n",
+  },
+  {
+    name: "Component",
+    about: "A part of an app or store, one level down.",
+    shape: { icon: "tag", colour: "grey", properties: floeBuilt },
+    template: "# {{title}}\n\n## Uses\n",
+  },
+);
+
 /** Starter types in sets, by the kind of collection they suit (F20). The sets will become the
  *  built-in collection types once a few collections show what repeats. */
 export const STARTER_SETS: { name: string; about: string; types: string[] }[] = [
@@ -343,6 +439,7 @@ export const STARTER_SETS: { name: string; about: string; types: string[] }[] = 
   { name: "Programme", about: "Work with a start and an end.", types: ["Project", "Meeting", "Decision", "Risk", "Action", "Stakeholder", "Milestone"] },
   { name: "Department", about: "A team's long-running knowledge.", types: ["Team", "Person", "Process", "Policy", "Service", "Meeting"] },
   { name: "Reference", about: "Material to read and publish.", types: ["Article", "Topic", "Source"] },
+  { name: "Architecture", about: "Landscapes from Floe: import its folder-of-notes export.", types: ["Landscape", "Domain", "Actor", "System", "App", "Store", "Component"] },
 ];
 
 /** The note for a starter type. */

@@ -7,6 +7,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 [ -f .env ] && set -a && . ./.env && set +a
 PORT="${COMMONPLACE_PORT:-8070}"
+# Folder collections (F22): made here first, so the container engine doesn't create it as root.
+COMMONPLACE_FOLDERS="${COMMONPLACE_FOLDERS:-$HOME/Commonplace}"
+COMMONPLACE_FOLDERS="${COMMONPLACE_FOLDERS/#\~/$HOME}"
+export COMMONPLACE_FOLDERS COMMONPLACE_FOLDERS_LABEL="${COMMONPLACE_FOLDERS/#$HOME/~}"
+mkdir -p "$COMMONPLACE_FOLDERS"
 URL="http://localhost:$PORT"
 IMAGE="${COMMONPLACE_IMAGE:-commonplace:laptop}"
 PG_IMAGE="pgvector/pgvector:pg18"
@@ -31,12 +36,12 @@ ensure_secrets_key() {
 }
 
 wait_healthy() {
-  printf "Waiting for Commonplace"
+  printf "Waiting for DO Notes"
   for _ in $(seq 1 90); do
     if curl -fsS "$URL/health" >/dev/null 2>&1; then echo " ready."; return 0; fi
     printf "."; sleep 1
   done
-  echo; echo "Commonplace didn't answer on $URL. See ./commonplace.sh logs" >&2; return 1
+  echo; echo "DO Notes didn't answer on $URL. See ./commonplace.sh logs" >&2; return 1
 }
 
 # The one-time token from the log, only while no account exists yet.
@@ -56,14 +61,14 @@ cmd_start() {
   ensure_secrets_key
   if ! has_image "$IMAGE"; then
     if [ -f "$HERE/images/commonplace-images.tar" ]; then cmd_load
-    elif has_source; then echo "Building Commonplace (first time takes a few minutes)…"; compose build app
-    else echo "No Commonplace image. Put commonplace-images.tar in laptop/images and run ./commonplace.sh load" >&2; exit 1
+    elif has_source; then echo "Building DO Notes (first time takes a few minutes)…"; compose build app
+    else echo "No DO Notes image. Put commonplace-images.tar in laptop/images and run ./commonplace.sh load" >&2; exit 1
     fi
   fi
   compose up -d --no-build
   wait_healthy
   local token; token="$(setup_token || true)"
-  echo "Commonplace is running at $URL"
+  echo "DO Notes is running at $URL"
   if [ "${COMMONPLACE_LISTEN:-127.0.0.1}" != "127.0.0.1" ]; then
     echo "Other devices on your network can use http://$(hostname -s 2>/dev/null || hostname).local:$PORT"
   fi
@@ -89,7 +94,7 @@ cmd_backup() {
 cmd_restore() {
   local file="${1:-}"
   [ -f "$file" ] || { echo "Usage: ./commonplace.sh restore backups/commonplace-YYYYMMDD-HHMMSS.dump" >&2; exit 1; }
-  read -r -p "Replace everything in this Commonplace with $file? [y/N] " ok
+  read -r -p "Replace everything in this DO Notes with $file? [y/N] " ok
   [ "$ok" = "y" ] || [ "$ok" = "Y" ] || { echo "Nothing changed."; exit 0; }
   compose up -d db
   compose stop app
@@ -102,13 +107,13 @@ cmd_restore() {
 }
 
 cmd_update() {
-  has_source || { echo "Update needs the Commonplace source (git pull in the repo), or a newer commonplace-images.tar with ./commonplace.sh load" >&2; exit 1; }
+  has_source || { echo "Update needs the DO Notes source (git pull in the repo), or a newer commonplace-images.tar with ./commonplace.sh load" >&2; exit 1; }
   [ -d "$HERE/../.git" ] && git -C "$HERE/.." pull --ff-only || true
   cmd_backup
   compose build app
   compose up -d --no-build
   wait_healthy
-  echo "Updated. Commonplace updates its database on start; the backup above is your way back."
+  echo "Updated. DO Notes updates its database on start; the backup above is your way back."
 }
 
 # One file with both images, to carry Commonplace to a laptop with no source and no registry access.
@@ -116,7 +121,7 @@ cmd_update() {
 cmd_package() {
   local platform="${1:-}" image="$IMAGE" arch save_opts=()
   if [ -n "$platform" ]; then
-    has_source || { echo "Packaging for another platform needs the Commonplace source" >&2; exit 1; }
+    has_source || { echo "Packaging for another platform needs the DO Notes source" >&2; exit 1; }
     image="commonplace:laptop-${platform//\//-}"
     echo "Building ${image} for ${platform} (under emulation this can take 10+ minutes)…"
     "$ENGINE" build --platform "$platform" -t "$image" "$HERE/.."
@@ -151,7 +156,7 @@ cmd_load() {
 }
 
 cmd_remove() {
-  read -r -p "Delete Commonplace and ALL its notes from this laptop? Type 'delete' to confirm: " ok
+  read -r -p "Delete DO Notes and ALL its notes from this laptop? Type 'delete' to confirm: " ok
   [ "$ok" = "delete" ] || { echo "Nothing changed."; exit 0; }
   compose down -v
   echo "Removed. Backups in laptop/backups (and .env, with SECRETS_KEY) were kept."
@@ -175,9 +180,9 @@ case "${1:-help}" in
   remove) cmd_remove ;;
   *)
     cat <<HELP
-Commonplace on this laptop ($ENGINE, $URL)
+DO Notes on this laptop ($ENGINE, $URL)
 
-  ./commonplace.sh start      Start Commonplace (builds or loads the image the first time) and open it
+  ./commonplace.sh start      Start DO Notes (builds or loads the image the first time) and open it
   ./commonplace.sh stop       Stop it; notes are kept
   ./commonplace.sh status     Is it running?
   ./commonplace.sh logs       Follow the app log
@@ -185,12 +190,12 @@ Commonplace on this laptop ($ENGINE, $URL)
   ./commonplace.sh backup     Save the database to laptop/backups
   ./commonplace.sh restore F  Replace the database with backup F
   ./commonplace.sh update     Back up, rebuild from the latest source, restart
-  ./commonplace.sh package [P] Make one .tar.gz to copy Commonplace to another laptop (no source or
+  ./commonplace.sh package [P] Make one .tar.gz to copy DO Notes to another laptop (no source or
                               internet needed there); P = linux/amd64 for Intel/AMD machines when
                               packaging on Apple Silicon
   ./commonplace.sh load       Load images from laptop/images/commonplace-images.tar
   ./commonplace.sh reset-password E  Give the account with email E a new password
-  ./commonplace.sh remove     Delete Commonplace and its notes (backups are kept)
+  ./commonplace.sh remove     Delete DO Notes and its notes (backups are kept)
 HELP
   ;;
 esac

@@ -334,6 +334,22 @@
   color: var(--accent);
 }
 
+/* Add relationship… (F27), under Add property */
+.prop-add-rels {
+  padding: 4px 0 2px;
+}
+.prop-add-rel {
+  background: none;
+  border: none;
+  padding: 2px 0;
+  font-size: var(--text-ui-sm);
+  color: var(--muted);
+  cursor: pointer;
+}
+.prop-add-rel:hover {
+  color: var(--accent);
+}
+
 /* The side panel's "made on" line */
 .made-on {
   padding-top: 0;

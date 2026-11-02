@@ -26,6 +26,12 @@
   padding: 10px;
   margin-top: 4px;
 }
+/* Sign in with a passkey (F32): under Sign in, the same width. */
+.login-card .passkey-button {
+  padding: 10px;
+  justify-content: center;
+  gap: 8px;
+}
 .brand {
   display: flex;
   align-items: center;
@@ -35,4 +41,20 @@
 .brand h1 {
   margin: 0;
   font-size: var(--text-display);
+}
+
+/* An app asking to use your notes (web/components/OAuthConsent.tsx). */
+.consent h2 {
+  margin: 0;
+  font-size: var(--text-title);
+  font-weight: 500;
+}
+.consent p {
+  margin: 0;
+}
+.consent-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
 }

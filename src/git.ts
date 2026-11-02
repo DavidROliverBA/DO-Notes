@@ -20,11 +20,11 @@ import { sql } from "./db";
 import { emit } from "./events";
 import { flushNote, kick } from "./collab";
 import { blob, branchHead, clientFor, enc, type GitHub, repoPath, treeAt, type TreeEntry } from "./github";
-import { isAttachmentPath, normalisePath } from "./markdown";
 import { merge3 } from "./merge3";
 import { createNote, deleteNote as trashNote, findByPath, overwriteContent, renameNote } from "./notes";
 import { settings } from "./settings";
 import { assertRoom, MAX_NOTE_BYTES } from "./storage";
+import { asText, importable, isNotePath, md5, pool, vaultPathFor } from "./syncCore";
 import { mimeFor } from "./transfer";
 import { createVault, type Vault } from "./vaults";
 
@@ -39,37 +39,8 @@ async function deleteNote(vaultId: number, noteId: number, userId: number) {
   await trashNote(vaultId, noteId, userId);
 }
 
-const md5 = (data: string | Uint8Array) => createHash("md5").update(data).digest("hex");
-const isNotePath = (p: string) => /\.(md|markdown)$/i.test(p);
-/** Text as notes store it: no BOM, LF line endings (as zip imports do). */
-const asText = (data: Uint8Array) => new TextDecoder().decode(data).replace(/^﻿/, "").replace(/\r\n/g, "\n");
-
-/** Copied in: markdown and attachments, not inside a dot-folder (app settings, .github) or node_modules. */
-function importable(rel: string): boolean {
-  if (rel.split("/").some((s) => s.startsWith(".") || s === "node_modules")) return false;
-  return isNotePath(rel) || isAttachmentPath(rel);
-}
-
-function vaultPathFor(rel: string): string | null {
-  try {
-    return isNotePath(rel) ? normalisePath(rel.replace(/\.markdown$/i, ".md")) : normalisePath(rel, null);
-  } catch {
-    return null;
-  }
-}
-
 const cleanFolder = (f: string) => f.trim().replace(/^\/+|\/+$/g, "");
 const prefixOf = (folder: string) => (folder ? `${folder}/` : "");
-
-/** Run `fn` over `items`, `n` at a time. */
-async function pool<T>(items: T[], n: number, fn: (item: T) => Promise<void>): Promise<void> {
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(n, items.length) }, async () => {
-      while (next < items.length) await fn(items[next++]!);
-    }),
-  );
-}
 
 export interface VaultGit {
   vault_id: number;

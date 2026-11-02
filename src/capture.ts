@@ -9,6 +9,7 @@ import { createNote, findByPath, overwriteContent } from "./notes";
 import { settings } from "./settings";
 import { authenticateToken } from "./tokens";
 import { saveAttachment } from "./transfer";
+import { setFileText } from "./fileText";
 import { saveWeblink } from "./weblinks";
 import * as vaults from "./vaults";
 
@@ -21,13 +22,16 @@ async function authenticate(req: Request) {
   const t = await authenticateToken(req, "capture");
   // A token for "home" follows the person's home collection (F20).
   const vaultId = t.vaultId ?? (await vaults.homeOf(t.user.id));
-  if (!vaultId) throw new HttpError(404, "There's no home collection to save to: make one in Commonplace first");
+  if (!vaultId) throw new HttpError(404, "There's no home collection to save to: make one in DO Notes first");
   await vaults.requireRole(vaultId, t.user, "editor");
   return { user: t.user, vaultId, notePath: t.notePath };
 }
 
 export interface Shared {
   files: File[];
+  /** Each file's words, read on the device (Apple's text and speech recognition): `file_text`,
+   *  in the files' order. Kept for search; a voice note's also goes under it in the Inbox. */
+  fileTexts: string[];
   texts: string[];
   urls: string[];
   title: string;
@@ -41,7 +45,7 @@ export interface Shared {
  */
 async function readShared(req: Request): Promise<Shared> {
   const type = req.headers.get("content-type") ?? "";
-  const out: Shared = { files: [], texts: [], urls: [], title: "" };
+  const out: Shared = { files: [], fileTexts: [], texts: [], urls: [], title: "" };
   if (type.includes("multipart/form-data") || type.includes("application/x-www-form-urlencoded")) {
     const form = await req.formData();
     for (const [key, v] of form.entries()) {
@@ -49,6 +53,7 @@ async function readShared(req: Request): Promise<Shared> {
         const f = v as unknown as File;
         if (f.size > 0) out.files.push(f);
       } else if (key === "title") out.title = v;
+      else if (key === "file_text") out.fileTexts.push(v.slice(0, 200_000));
       else if (key === "url") out.urls.push(...v.split(/\s+/).filter((u) => URL_ONLY.test(u)));
       else if (key === "item" || key === "text") out.texts.push(v);
     }
@@ -138,14 +143,19 @@ export function appendEntries(current: string, entries: string[]): string {
 /** POST /api/capture: authenticate the capture token, save what was shared, append it to the inbox. */
 export async function capture(req: Request): Promise<{ ok: true; message: string; note: { id: number; path: string }; added: number }> {
   const { user, vaultId, notePath } = await authenticate(req);
-  const { files, lines } = plan(await readShared(req));
+  const shared = await readShared(req);
+  const { files, lines } = plan(shared);
   if (!files.length && !lines.length) throw new HttpError(400, "Nothing to save: share a link, some text or a photo");
 
   const at = when();
   const entries: string[] = [];
-  for (const file of files) {
+  for (const [i, file] of files.entries()) {
     const path = await saveAttachment(vaultId, user.id, await preparePhoto(await named(file)), "attachments");
-    entries.push(entryFor(`![[${path}]]`, at));
+    const words = (shared.fileTexts[i] ?? "").trim();
+    if (words) await setFileText(vaultId, path, words);
+    // A voice note's transcript goes under it, quoted, so the Inbox reads without playing it.
+    const heard = words && /\.(m4a|mp3|wav|ogg)$/i.test(path) ? `\n> ${words.slice(0, MAX_TEXT).replace(/\n+/g, " ")}` : "";
+    entries.push(entryFor(`![[${path}]]${heard}`, at));
   }
   for (const line of lines) {
     // A shared link becomes a Weblink note (title, summary, picture), and the inbox links to it.

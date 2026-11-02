@@ -96,3 +96,69 @@ export const addColumn = (t: Table, at: number): Table => ({
 export const deleteColumn = (t: Table, at: number): Table =>
   t.header.length <= 1 ? t : { header: t.header.filter((_, i) => i !== at), align: t.align.filter((_, i) => i !== at), rows: t.rows.map((r) => r.filter((_, i) => i !== at)) };
 export const setAlign = (t: Table, col: number, a: Align): Table => ({ ...t, align: t.align.map((x, i) => (i === col ? a : x)) });
+export const moveRow = (t: Table, from: number, to: number): Table => {
+  if (to < 0 || to >= t.rows.length || from === to) return t;
+  const rows = [...t.rows];
+  rows.splice(to, 0, rows.splice(from, 1)[0]!);
+  return { ...t, rows };
+};
+export const moveColumn = (t: Table, from: number, to: number): Table => {
+  if (to < 0 || to >= t.header.length || from === to) return t;
+  const move = <T>(xs: T[]) => {
+    const ys = [...xs];
+    ys.splice(to, 0, ys.splice(from, 1)[0]!);
+    return ys;
+  };
+  return { header: move(t.header), align: move(t.align), rows: t.rows.map(move) };
+};
+
+/** A cell's value for sorting: a number when it reads as one (£4,200, 12%, -3.5), else its words. */
+function sortKey(cell: string): number | string {
+  const plain = cell.replace(/[*_`~=]|\[\[([^\]|]*\|)?|\]\]/g, "").trim();
+  const n = /^[-+]?[£$€¥]?\s*-?[\d,]*\.?\d+\s*%?$/.test(plain) ? Number(plain.replace(/[£$€¥,%\s+]/g, "")) : NaN;
+  return Number.isFinite(n) ? n : plain.toLowerCase();
+}
+/** Rows sorted by a column: numbers by size, then words A to Z (or the reverse); empty cells last. */
+export const sortBy = (t: Table, col: number, dir: "asc" | "desc"): Table => {
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+  const keyed = t.rows.map((r, i) => ({ r, i, k: sortKey(r[col] ?? "") }));
+  keyed.sort((a, b) => {
+    const ea = a.k === "";
+    const eb = b.k === "";
+    if (ea || eb) return ea === eb ? a.i - b.i : ea ? 1 : -1;
+    const na = typeof a.k === "number";
+    const nb = typeof b.k === "number";
+    const c = na && nb ? (a.k as number) - (b.k as number) : na !== nb ? (na ? -1 : 1) : collator.compare(String(a.k), String(b.k));
+    return (dir === "asc" ? c : -c) || a.i - b.i;
+  });
+  return { ...t, rows: keyed.map((x) => x.r) };
+};
+
+/** Cells copied from a spreadsheet (tab-separated lines), or null if the text isn't that: at
+ *  least two cells, and every line with the same number of them. */
+export function parseGrid(text: string): string[][] | null {
+  const lines = text.replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n");
+  if (!lines.some((l) => l.includes("\t"))) return null;
+  const grid = lines.map((l) => l.split("\t").map((c) => c.replace(/^"(.*)"$/s, "$1").replace(/""/g, '"').replace(/\s+/g, " ").trim()));
+  const cols = grid[0]!.length;
+  if (grid.some((r) => r.length !== cols) || cols * grid.length < 2) return null;
+  return grid;
+}
+
+/** A pasted range as a new table: its first line is the header. */
+export function tableFromGrid(grid: string[][]): Table {
+  const header = grid[0]!;
+  const rows = grid.length > 1 ? grid.slice(1) : [header.map(() => "")];
+  return { header, align: header.map(() => null), rows };
+}
+
+/** A pasted range written into the table from cell (row, col) across and down, adding rows and
+ *  columns where it runs past the edge. */
+export function pasteGrid(t: Table, row: number, col: number, grid: string[][]): Table {
+  let next = t;
+  const width = col + grid[0]!.length;
+  while (next.header.length < width) next = addColumn(next, next.header.length);
+  while (next.rows.length < row + grid.length) next = addRow(next, next.rows.length);
+  grid.forEach((cells, i) => cells.forEach((text, j) => (next = setCell(next, row + i, col + j, text))));
+  return next;
+}

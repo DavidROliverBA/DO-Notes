@@ -4,7 +4,7 @@ standalone: true
 ---
 # Organising notes
 
-Use folders when a note belongs in one place, tags when it belongs to several groups, and links and [types](types.md) for everything in between.
+Use folders when a note belongs in one place, tags when it belongs to several groups, and links and [types](types.md) for everything in between. To lay notes out side by side and draw how they connect, put them on a [board](boards.md).
 
 ![The file panel with folders open](images/file-panel.webp)
 
@@ -29,7 +29,7 @@ The [AI assistant](ai.md) can do this when you ask it.
 
 ## Tags
 
-Write `#tag` anywhere in a note, or list tags in its `tags` property. Tags can nest: `#garden/planning` is inside `#garden`. The **Tags** tab lists every tag with a count; click one to search for it.
+Write `#tag` anywhere in a note, or list tags in its `tags` property. Tags can nest: `#garden/planning` is inside `#garden`. The list that opens after `#` also offers each of your types (**New Person…**), which makes a typed note as you write: see [Types](types.md). The **Tags** tab lists every tag with a count; click one to search for it.
 
 ## Bookmarks
 
@@ -39,7 +39,7 @@ Write `#tag` anywhere in a note, or list tags in its `tags` property. Tags can n
 
 Deleting is never final straight away.
 
-- **Move to Trash** takes a note out of the collection and shows an **Undo** button for a few seconds.
+- **Move to Trash** takes a note out of the collection and shows an **Undo** button for 20 seconds, or for as long as the pointer is over it.
 - **Trash** (the bin at the bottom of the file panel) keeps deleted notes, with their history, for 30 days. Restore one from there.
 
 ![The Undo button after moving a note to Trash](images/undo-toast.webp)

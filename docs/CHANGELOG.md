@@ -4,6 +4,525 @@ What's been finished, newest first, with the date and the release or commit. Wha
 [BACKLOG.md](BACKLOG.md); finished designs are in [design/](design/). Releases on GitHub carry the
 same notes.
 
+- **2026-11-02** — **Landscapes from Floe, kept up to date** (F41): with Floe connected, ⌘K →
+  **Bring in a landscape from Floe…** puts a landscape in a folder (`Architecture/<landscape>`),
+  with the types it needs and an overview note holding its diagrams. **Update from Floe** (⋯)
+  previews, then rewrites only Floe's part of each note (its keys, and the text between
+  `<!-- floe -->` markers, drawn as a quiet *From Floe* label in Live Preview), matched by
+  `floe-id`, so what you wrote stays; renames follow with their links, and objects removed in
+  Floe are marked `status: removed`, never deleted. Changes to Floe's part are named before Floe's
+  version replaces them. Opening the overview asks Floe once a session whether it has changed.
+  `/` → **Floe diagram…** puts any diagram in a note, and **Update Floe diagrams** redraws them.
+  Reads Floe's own notes export with the connection's read-only token; nothing in Floe changes.
+  Design in `docs/design/F41.md`.
+- **2026-11-02** — **Skein is now DO Notes** (David Oliver's initials; "Skein" was hard to say):
+  the name in the apps, the clipper, Siri, messages and help. Code names, the `commonplace://`
+  scheme and bundle ids don't change, so installed apps, tokens and links keep working. Still MIT licensed, and not a commercial product.
+- **2026-11-02** — **Siri: Open a note and Ask Skein** (L8 step 5), on the iPhone and the Mac,
+  beside Save to Skein: Siri asks which note (or the question) and opens Skein at the note by
+  its title in any collection (`/api/find`), or with the question sent to the assistant. They
+  open the app, so they use its sign-in and need no token.
+- **2026-11-02** — **Send to Longview** (F30 step 4): with a Longview write token added under
+  Settings → Connections → Longview (kept apart from the read token, used only for `save_url`), a
+  Weblink note's ⋯ menu → **Send to Longview…** saves its address in Longview, with the reason
+  typed; never the note. The assistant's connection stays read-only.
+- **2026-11-02** — **Two-step sign-in** (F40): Settings → Account → Two-step sign-in adds a
+  code app (TOTP, QR code or key, Apple Passwords and the rest) as a second step after the
+  password, with ten single-use recovery codes, shown once; turning it on signs out other
+  devices; passkeys skip the code. **Passkeys only** drops the password (needs a passkey here;
+  the last one can't be removed; a password comes back with a passkey's confirmation).
+  `reset-password` on the kit clears both. Also: the **Mac app has its icon** (the icon set had
+  only the iPhone's sizes).
+- **2026-11-01** — **Comments on notes** (L3): select words, ⋯ → **Comment…**; the words are
+  marked, and the thread is in the side panel with Reply and Resolve (Undo). Anchored by Yjs
+  relative positions, so it stays on its words while others type; kept beside the note, never
+  in the Markdown; exported in `.comments/`, kept in backups and restores; notifications for the
+  writer, the thread's starter and anyone @named. Design in `docs/design/L3.md`.
+
+- **2026-11-01** — **Notifications and activity** (F39): a bell in the file panel with an unread
+  count and a list (mentions, invitations, changes to notes you follow at most hourly, and
+  comments), each opening its note, plus *Since you last looked here* for the open collection.
+  Typing `@` lists the collection's people as well as assistants; **⋯ → Follow this note**. The
+  iPhone and Mac apps show new ones as alerts when they refresh. Design in `docs/design/F39.md`.
+
+- **2026-11-01** — **Share one note by link** (F38): ⋯ → **Share by link…** makes a read-only,
+  unlisted page of the note at `/s/<slug>/`, copied to the clipboard. It's a snapshot, as a
+  published site is (no script, the note's pictures and files copied, links to other notes as
+  plain words, hidden comments hidden); **Update the page** brings it up to date, **Stop
+  sharing** takes it away at once, with Undo (`src/shareLink.ts`).
+
+- **2026-11-01** — **The words inside files, and voice notes.** Search finds words inside PDFs
+  (read on the server with `unpdf` when added, and in the background for older ones), photos
+  shared or saved from the iPhone and Mac apps (read on the device by Apple's text recognition),
+  and voice notes, and shows the note that uses the file (*In Receipt.png: …*); the words are
+  kept on the attachment, never written into notes. Quick capture's **Record** makes a voice
+  note, transcribed on the device by Apple's speech recognition; it goes to the Inbox with the
+  transcript quoted under it (`src/fileText.ts`, `ios/Shared/TextReader.swift`,
+  `ios/Shared/VoiceNote.swift`).
+
+- **2026-11-01** — **From your connections**, in the side panel (F33 step 4; F30 step 3): for the
+  open note, what each connection the person put in the panel has on it, looked up by the note's
+  title (never its text) when it opens or is renamed, and shown as links out. Off for each
+  connection until turned on in its Review, which saves at once; Longview and Recall use their
+  search tools, any other service a read tool with one text input. Kept ten minutes per note
+  (`src/outsidePanel.ts`).
+
+- **2026-11-01** — **Landscapes from Floe, first part** (towards F41): the
+  **Architecture** starter types (Landscape, Domain, Actor, System, App, Store, Component; their
+  properties are the ones Floe's folder-of-notes export writes) and the set in Setup; an import
+  now **adds the starter types its notes name** (`type: system`, any case) when the collection has
+  none, and says which (`typesAdded`; `src/transfer.ts`); and `scripts/floe-diagrams.ts`, which
+  fills each ```` ```mermaid ```` block starting `%% floe: <landscape> / <diagram>` with that Floe
+  diagram (`--list` prints every diagram's line, `--dry-run` writes nothing).
+
+- **2026-11-01** — **Floe** as a connection preset (F33): a read-only Floe token and its address,
+  and the assistant lists your landscapes, opens one, and fetches a diagram as Mermaid C4
+  (`floe_landscapes`, `floe_landscape`, `floe_diagram`). Floe's address can be preset with
+  `FLOE_MCP_URL`.
+
+- **2026-11-01** — **Connect any service** (F33 step 2): Settings → Connections → **Add a
+  connection…** looks at an MCP address first and says what it found, or which rule it fails (a
+  web page, a sign-in on its own page, tools that all change things); then a token, or no
+  sign-in past a warning the person confirms. Its read tools start on, Review opens to choose,
+  and **Try it** makes one harmless call. The laptop kit may reach services on the same computer
+  (`CONNECTIONS_ALLOW_LOCAL`). A service with no sign-in gets no Authorization header at all.
+
+- **2026-11-01** — **The Skein Clipper** (F37), for Safari and Chrome: a toolbar button and a
+  right-click menu save the page (as a Weblink note), the selected words (as a quote linked to
+  the page) or a picture to the Inbox, through `POST /api/capture`. In Safari it comes with the
+  Mac app and uses its sign-in; in Chrome it's loaded from `clipper/` with a capture token. The
+  capture route now accepts requests from other origins, since it signs in by token alone.
+
+- **2026-11-01** — **Quick capture** (F36): a **Save to Skein** widget for the iPhone's home and
+  lock screens opens a small form that saves to the Inbox (`commonplace://capture`); on the Mac,
+  **⌃⌥Space** from any app and a **✎** menu-bar item open the same form in a floating window
+  (each can be switched off in the Mac app's Settings). The form sends text as the share
+  extension does (`ios/Shared/QuickCapture.swift`, `ios/Widget/`, `ios/Mac/CapturePanel.swift`).
+
+- **2026-11-01** — **Reminders for dated tasks** (F35). The Skein apps on the iPhone and Mac
+  remind you on the day about open tasks with a date (📅) in notes you wrote or last edited, or
+  that name you (@Name or [[Name]]), at 09:00 or your own time (Settings → Account →
+  Reminders), or the task's own `⏰ 14:30`. **Done** in the alert ticks the task; **Remind me
+  in an hour** snoozes it; tapping opens the note. The apps schedule the alerts themselves
+  (no push service), refreshed when opened and, on the iPhone, in the background
+  (`src/reminders.ts`, `ios/Shared/Reminders.swift`; design in `docs/design/F35.md`).
+
+- **2026-11-01** — **N12, the consolidation pass, is finished.** The last part, a real iPhone,
+  passed every journey in the Skein app on David's iPhone 17 Pro Max: opening and the single
+  sharing token; writing with the formatting bar and no Safari form bar; ticking a task; links and
+  search; sharing a page, a photo and text, and Siri's "Save to Skein", all to the Inbox; offline
+  open, edit and merge in Airplane mode; every Settings section in light and dark; VoiceOver
+  through the library, a note, a task and the ⋯ menu; and a note edited in Safari. The earlier
+  parts (automated accessibility, speed at 10,000 notes, a tested restore, the streamed backup)
+  were done 2026-10-13.
+
+- **2026-11-01** — One sharing token per device (L8): the iPhone app's token is named with a
+  short code of its own (*iPhone app · 7Q4K*), and before the app makes a new one it revokes any
+  others with its name, so tokens it forgot (after signing out, or an emptied keychain) no longer
+  pile up in Settings → Connections. The Mac app's already carried the Mac's name.
+
+- **2026-11-01** — **Commonplace is now Skein** (F34), with a new icon: a ball of thread with
+  one strand looping out to a gold link, in shades of navy blue. The shown name changed everywhere people see it (the
+  web app, the iPhone and Mac apps (the Mac app is now Skein.app), the share sheet, Siri's
+  "Save to Skein", help, the tour, messages, the standalone file and the laptop kit); the code,
+  bundle ids, addresses and paths keep `commonplace`. `scripts/make-icons.ts` makes every icon
+  from `web/icon.svg`, including the iPhone's dark and tinted icons. The name was chosen after a
+  gap analysis (`docs/GAP-ANALYSIS.md`) and a search of the alternatives (recorded in F34).
+
+- **2026-11-01** — **Save to Commonplace** with Siri (L8), on the iPhone and the Mac: an App
+  Intent (`ios/Intents/SaveToCommonplace.swift`) asks what to save and sends it to the home
+  collection's Inbox with the app's capture token, as the share extension does. Its phrases
+  (*save to*, *add to*, *note in Commonplace*) need no setup; it's also in Shortcuts, Spotlight
+  and the Action button.
+
+- **2026-11-01** — The connections manager, step 1 (F33): Longview and Recall as presets.
+  - Each connection's tools are listed from the service and sorted **read**, **doesn't say**
+    or **changes things** (`src/connections.ts`); a preset (`src/presets.ts`) says which of its
+    tools read, and the rest go by their own annotations. Tools that change things are never
+    offered; one that doesn't say is off, and asks before every use when turned on.
+  - **Review** beside each connected service chooses its tools. If the service changes a tool the
+    person chose, the connection is held, offering nothing, until they look; Review shows what
+    it said before and now.
+  - Settings → Connections → **Connected services** lists every connection; Longview and Recall
+    are added from there. F30's two connections move across on first boot.
+  - `tools/list` is followed through its pages.
+
+- **2026-11-01** — No form bar above the keyboard in the iPhone app (L8). The bar iOS puts
+  over the keyboard in a web view (up and down chevrons, a tick) is switched off in the app
+  (`ios/App/FormBar.swift`), giving the note that row; the keyboard closes by swiping down over
+  the text. Safari still shows it. iPhone build 5.
+
+- **2026-11-01** — Longview and Recall as connections (F30 steps 1–2, and Recall).
+  - Settings → Connections → **Longview**: its address and a read token, checked with one
+    search; a token that could change Longview is refused. **Recall**: Connect Recall… signs in
+    on Recall's own page (OAuth with PKCE, Commonplace registering itself), for read access
+    only. Each sealed with `SECRETS_KEY`, never sent to the browser; Disconnect removes it (and
+    revokes Recall's sign-in).
+  - The in-app assistant gets `longview_search`, `longview_entity`, `longview_trend`,
+    `longview_ask`, `recall_search` and `recall_read`: in-app only, never over Commonplace's MCP
+    server. The web's rule: a search in the person's words runs, anything else asks; after
+    one, every change asks (`src/outside.ts`, a small MCP client in `src/mcpClient.ts`).
+  - Tests: fake Longview and Recall (`test/fakeMcp.ts`), the whole sign-in, refresh and revoke.
+  - Fixed on the way: a server starting while another writes to the database tries its schema
+    up to ten times instead of five (it gave up and didn't start), and the storage-guard test
+    has the time its second server needs.
+
+- **2026-11-01** — Passkeys: sign in with Face ID or Touch ID (F32).
+  - **Settings → Account → Passkeys:** add one on this device, see each with when it was last
+    used, remove one (Undo puts it back).
+  - **Sign in with a passkey** on the sign-in page, or from the email box's suggestions.
+    Passwords keep working.
+  - WebAuthn with user verification (`src/passkeys.ts`, `@simplewebauthn/server` and
+    `/browser`); only each passkey's public half is stored, per address. Tests sign in with a
+    software authenticator (`test/fakeAuthenticator.ts`) and, in the browser, Chrome's virtual
+    one.
+  - The Mac app has Associated Domains for the cloud (`webcredentials:`, `applinks:`), so
+    passkeys and saved passwords work in it, as they now do in the iPhone app.
+
+- **2026-11-01** — Commonplace as a Mac app (L8).
+  - A native Mac app (`ios/Mac/`, in the iPhone app's project): the web client in windows and
+    tabs, the Mac's menus (Reload, zoom, Back and Forward; the web's own shortcuts reach the
+    page), the Mac's file chooser and save panel, other sites in the browser.
+  - **Settings** chooses the cloud (the default), this Mac's kit or another address, and
+    turns on opening at login.
+  - **Share → Commonplace** from Safari, Notes, Photos and the Finder saves to the Inbox, with
+    the token the app makes at sign-in (*Mac app* in Settings → Connections).
+  - The share extension's work and the token keeper moved to `ios/Shared/`, used by both apps.
+  - Help: [The Mac app](help/mac-app.md).
+
+- **2026-11-01** — F31, the relationship builder, is done: all four steps, checked by keyboard
+  and with VoiceOver on the iPhone. Design in [design/F31.md](design/F31.md).
+
+- **2026-11-01** — Every relationship in one place, and turned round (F31 step 4).
+  - **Relationships** in the side panel lists a note's relationships both ways, each read from
+    this note (*Loft · comes after · Roof*), each kind's two directions together; it takes the
+    place of the per-property *As …* lists. The links route now returns the note's own relation
+    properties too (`relationsFrom`, `src/typeIndex.ts`).
+  - Each row's ⋯ (keyboard too): **Change…** (the builder, replacing it), **Swap** (turn it
+    round), **Reverse** (the same relationship written into the other note under the other
+    direction's name, `comes-after: [[Roof]]` in Loft), **Remove**. One Undo puts both notes
+    back (`web/lib/relations.ts`); a row that has changed since it was drawn changes nothing.
+  - A relationship kept under the other direction's name exports as that name, with the kind as
+    its inverse in `vocab/rels.json`, and comes back on import as the same kind.
+  - Fixed on the way: a ⋯ menu opened by keyboard on a laptop now puts focus on its first item
+    (it was hidden while being placed); a write from outside the editor to an open note is saved
+    at once instead of after the typing pause, so it reads back straight away; the builder
+    fetches the note list if it opens before the app's has loaded.
+
+- **2026-10-31** — The relationship builder (F31 step 3).
+  - One sentence of three labelled boxes, **[Roof] [comes before] [Loft]**, each a
+    type-to-filter list that works by keyboard alone (`web/ui/Combobox.tsx`, the ARIA combobox
+    pattern); focus moves on as each is chosen, and the whole sentence is read out as it changes.
+  - Either direction of a kind can be chosen, and **Swap** reads it from the other note; it's
+    always written into the note it starts from. A new kind can be added from it, with its name
+    the other way round. Add, then Undo from the message.
+  - Opens from ⌘K, the note's ⋯ menu, `/`, **Add relationship…** under the properties, and a
+    board arrow (the arrow's notes and label filled in). It replaces the two-step dialogs.
+
+- **2026-10-31** — A collection's own kinds of relationship (F31 step 2).
+  - A **Relationships** note at the top of a collection lists its own kinds as a table: name, the
+    name the other way round (— when it reads the same both ways) and meaning
+    (`src/relationships.ts`).
+  - One list everywhere (`GET /api/vaults/:v/relationships`): the collection's own, then its
+    types' relations, then AI-XF's core kinds. **Add relationship…** offers it, and the other
+    note's side panel names a relationship the other way round (*comes after*).
+  - AI-XF export writes the collection's kinds into `vocab/rels.json` with both names, used or
+    not; import adds a bundle's kinds to the note (or makes it), never twice.
+
+- **2026-10-31** — Board arrows by keyboard (F31 step 1).
+  - **Reverse the arrow** turns a selected arrow round (ends and sides swap, heads stay), one Undo.
+  - **Connect to…** draws an arrow from the selected card to one picked from a list: no drag
+    needed (WCAG 2.5.7).
+  - **Arrows on this board** lists every arrow as a sentence (*Roof → comes before → Loft*);
+    choosing one selects it and brings it into view. It's the board's text alternative.
+  - The board's toolbar wraps on the phone instead of running off the screen.
+
+- **2026-10-31** — Commonplace as an iPhone app (L8 step 1, with parts of steps 2 and 4).
+  - **A native app** (`ios/`, Swift): Commonplace's own web client, full screen, signed in as on
+    the web. Links to other sites open in a Safari sheet; downloads offer the share sheet; the
+    server's domain is app-bound, so the service worker runs and the app opens offline.
+  - **Commonplace in every share sheet:** a link, some text or up to 10 photos go to the home
+    collection's Inbox, with a preview first and VoiceOver labels throughout. No Shortcut to
+    build: the app makes its own **iPhone app** token at sign-in (revocable in Settings →
+    Connections) and drops it at sign-out.
+  - Universal links and password autofill once `APPLE_APP_IDS` is set on the server.
+  - Checked end to end on the simulator (`bun scripts/ios-e2e.ts`): the app signs in, makes its
+    token, and a shared link, text and photo land in the Inbox, including a page from Safari and
+    a photo from Photos shared through the real share sheet.
+
+- **2026-10-31** — AI-XF: ids, and bundles in and out (F9; design in [design/F9.md](design/F9.md)).
+  - **Ids:** every new note gets `id:` (from its title, kept for ever: renames and copies don't
+    change it), so `[[kitchen-extension]]` always finds the note and Longview can point at it. It's
+    kept out of sight in the app; ⋯ or ⌘K **Copy the note's id**. A collection can turn it off.
+  - **Export as AI-XF bundle** (Settings, ⌘K, or a folder's menu): canonical concepts, relations
+    as typed links mirrored in the body, a manifest that keeps its namespace, and type and rel
+    vocabularies. Notes without an id are given one first, after asking. The Testbed collection
+    passes the reference validator at Level 3 with no warnings.
+  - **Import a bundle:** every key kept; typed links become relation properties; missing types
+    are made. `ai-concepts-kb` and `psychology-kb` go in and out again at Level 3 with every link.
+
+- **2026-10-31** — Boards: notes as cards on a whiteboard (F11, all four steps; design in
+  [design/F11.md](design/F11.md)).
+  - **A board is a `.canvas`** (JSON Canvas), so boards from Obsidian open as they were and
+    boards made here open there. ⌘K → **New board**; imported `.canvas` files become boards.
+  - **Cards:** notes (the note itself, so an edit anywhere shows on every board), other boards
+    (a small map of their cards; click to open), text in Markdown, links, pictures and labelled
+    groups that carry their cards. Move, resize from the corners, colour, front and back.
+  - **Arrows** from the dot on any side of a card, with labels. An arrow between two notes can
+    become a relation property of the first, so the link holds outside the board.
+  - **Layouts:** Tidy up, Arrange the group, Mind map from here; each one Undo.
+  - **Live and offline:** several people arrange a board at once (different cards' moves all
+    stay; others' selections show), Undo takes back only your own changes, and a board opened
+    once works offline. 150 cards pan smoothly in the phone emulation.
+  - **A note's boards:** the side panel's **On boards** lists the boards a note is on and the
+    arrows to and from it there.
+  - Boards kept as plain files by earlier versions move into notes at start-up, unchanged.
+
+- **2026-10-31** — Undo stays long enough to use: a message with **Undo** now stays 20 seconds
+  (was 8), and any message waits while the pointer is on it or focus is in it. Found walking
+  through moving a note between the Mac and the cloud.
+
+- **2026-10-30** — The cloud library on your Mac (F23, commits 5e34de7 and 5c3285a; design in
+  [design/F23.md](design/F23.md)).
+  - **One menu:** on the Mac, Settings → Connections → *Cloud library* signs in to the
+    Commonplace you use on the web; its collections join the menu under *In the cloud*. Notes
+    open and change there live, with everyone else, and stay on the Mac for when the cloud can't
+    be reached.
+  - **Move between them:** *Move to another collection…* moves notes or folders between the Mac
+    and the cloud, with pictures, types and history; Undo puts them back.
+  - **In the cloud:** a Mac signs in with its own kind of token (`cpd_`, scope `device`), listed
+    in Settings → Connections → *Macs signed in*; signing it out closes it at once. New API:
+    `/bundle` and `/receive` per collection.
+  - Members, renaming, publishing and GitHub stay in the cloud. Deploy the cloud first, then
+    update the laptop kit.
+  - Tests: 10 e2e, two of the servers at once; 1 browser (the whole sign-in, through the
+    consent page, with the test server as its own cloud).
+  - Fixed while checking it: the browser can load the sign-in's return address twice at once,
+    and the second said the sign-in had expired (now it waits for the first); and a server asked
+    for its collections with a device token added its own cloud collections, which loops when a
+    server is its own cloud (a device now gets only the collections kept there).
+
+- **2026-10-30** — Folders on your Mac (F22, commit 50d2cf1; design in
+  [design/F22.md](design/F22.md)).
+  - **Keep a collection in a folder of Markdown** on the Mac (laptop kit): Setup → Kept →
+    *Keep in a folder on this Mac…*. The folder is under `COMMONPLACE_FOLDERS` (`~/Commonplace`
+    by default), and any editor can open it. Edits there arrive within a second or so (live in
+    an open editor); edits here are written to the files.
+  - **Two ways:** *Both, kept in step* (a note changed in both places that doesn't merge waits
+    under *Changed in both places*) or *The folder is the master copy* (the folder wins;
+    *Rebuild from the folder*). Never conflict markers.
+  - Renames and moves go both ways; deleted in the folder → Trash; deleted here → the folder's
+    `.trash/`. A folder that vanishes or turns up empty pauses the collection.
+  - *Export to a folder* for any collection; the collection menu groups *In folders on this
+    Mac*; `src/syncCore.ts` holds the file helpers shared with GitHub collections.
+  - Help: *Folders on your Mac*. Tests: 10 e2e, 1 browser.
+
+- **2026-10-30** — Aliased links in tables resolve (commit 6b29b13).
+  - In a table the alias pipe is written `[[Note\|alias]]`; the link grammar took the backslash
+    as part of the target, so the editor's table cells showed such links as unresolved,
+    `![[pic.png\|300]]` became a broken link, and backlinks and the graph missed them. The
+    grammar now accepts `\|` (markdown, render, publish, dataview, the dataviewjs sandbox).
+  - Tests: 1 unit.
+- **2026-10-27** — The standalone file catches up with the app, and opens several folders at
+  once (release v0.0.73; `standalone/`).
+  - **Several folders:** each folder opened is a collection. The select at the top of the file
+    panel moves between them, opens another or closes one; each keeps its own place, bookmarks and
+    saved searches, and links resolve within their own folder. Chrome and Edge remember every
+    folder opened (not just the last) for the start screen, with × to forget one.
+  - **The app's editor** replaces the standalone's simpler one: the `/` menu, the formatting bar,
+    folding, hover previews, the block handle, the properties panel, icons and covers, spelling
+    help. Each note is a Yjs document kept only in the tab.
+  - **⌘K** with the commands that work without a server (`offerOnly` in `web/lib/commands.ts`),
+    and the note's ⋯ menu from the same list.
+  - **Bookmarks, saved searches, Tasks, Today's note, templates and the graph**, answered from the
+    open folder by `standalone/api-shim.ts`. The graph's date rules and the task finder moved to
+    `src/graphParts.ts` and `src/tasks.ts` so the browser can use them.
+  - **Renaming or moving a note updates the links to it**, as the app does.
+  - Focus mode, the full-width editor and the theme button.
+  - The router can keep its paths in memory (`keepInMemory`), since a file opened from disk can't
+    use the address bar for them.
+  - Not brought across: the guided tour (it walks the app's screens), and everything that needs
+    the server. The file is 3.8 MB (was 3.4).
+  - Tests: 7 standalone browser.
+- **2026-10-27** — Typing on the iPhone, clear of the keyboard bar (release v0.0.72; found in
+  the real-iPhone check, N12).
+  - iOS 26 floats a ˄ ˅ ✓ bar over the page above the keyboard, which no web page can hide
+    (checked again). A text box being typed in is now scrolled clear of it (`web/main.tsx`,
+    `--keyboard-bar`).
+  - **Search on a phone** folds away the collection, the GitHub bar and New/Today/Graph while the
+    box has focus or words in it, so the box is at the top and the results get the screen.
+  - **The GitHub bar on a phone** is compact: how many notes changed (and what's next, small,
+    under it), Send and ⋯; the branch's name is on the changes page.
+  - Tests: 1 browser extended.
+- **2026-10-26** — Easier table editing (release v0.0.71; `web/lib/tableModel.ts`,
+  `web/lib/tableWidget.ts`).
+  - **Row and Column menus** on the table's bar, for the cell you're in: insert above, below,
+    left or right; **move** a row up or down and a column left or right; delete; and **sort** the
+    rows by the column, A to Z or Z to A. Amounts sort as numbers (£1,200 after 90), words ignore
+    case and markup, empty cells go last, and equal values keep their order. The bar is shorter,
+    so it fits a phone.
+  - **Paste from a spreadsheet:** a range copied from Numbers, Excel or Google Sheets, pasted
+    into a note, becomes a Markdown table (its first row the header); pasted into a cell, it fills
+    the cells from there across and down, adding rows and columns as needed. In code it stays as
+    copied.
+  - **Fixed:** a cell left just before a move or sort could write its old text back over the
+    moved cell; a cell now writes back only when its own text was changed.
+  - Tests: 3 unit, 1 browser.
+- **2026-10-26** — Finding the tour (release v0.0.70).
+  - **Help** has **Take the tour** and **What's new** above its topics.
+  - **Search and Find a note offer commands:** typing a command's name ("tour", "history")
+    lists it beside the notes found, first in Find a note unless a note's title starts with the
+    words. Each word must start a word of the command's name or keywords; `/`-menu blocks are
+    left out. The standalone file's Find a note is unchanged.
+  - Tests: 1 browser.
+- **2026-10-26** — Guided tour (release v0.0.69; `web/lib/tour.ts`, `web/ui/Tour.tsx`).
+  - A step at a time over the real screen: the page dimmed except round the part being described,
+    a card with Next, Back and Skip (Escape ends it, ←/→ move). Laptop and iPhone paths; the
+    iPhone one starts with Add to Home Screen (and Safari's address bar at the Top).
+  - Offered once on the collection's home page; then ⌘K **Take the tour** and **What's new**,
+    which shows the steps for features added since this device last looked and is offered on the
+    home page after each release. Kept on the device (`cp:tour`). The tour opens a note and the
+    panels as it goes and puts the panels back after.
+  - Every step is in one list with the release that added it, so a new feature adds its step.
+  - Tests: 3 browser (laptop, What's new, iPhone).
+- **2026-10-26** — Editor usability, release 3 (release v0.0.68; `web/lib/format.ts`,
+  `web/lib/selectionToolbar.ts`).
+  - **Format bar on selection** (laptops): heading, bold, italic, strikethrough, highlight, inline
+    code, link and colour, each a command from `commands.ts`; it waits for the mouse to be let
+    go, shows what's already applied, and Escape hides it.
+  - **Formatting toggles:** ⌘B, ⌘I, ⌘⇧X and ⌘E (and the buttons) wrap the selection or take the
+    marks off again; `*` and `**` don't undo each other.
+  - **Link…** links the selected words to a note (`[[Note|words]]`) or a web address.
+  - Tests: 3 unit, 2 browser.
+- **2026-10-26** — Editor usability, release 2 (release v0.0.67; `web/lib/folding.ts`,
+  `web/lib/hoverPreview.ts`).
+  - **Folding:** a › after each heading and each list item with children folds what's under it
+    (a heading down to the next at its level), shown as "⋯ 12 lines"; ⌘⌥[ / ⌘⌥], and ⌘K
+    **Fold all headings** and **Unfold all**. A view only: the note doesn't change.
+  - **Hover preview:** rest the pointer on a `[[link]]` in the editor or reading view to see the
+    start of the note, or of the heading's section. Laptops only for now.
+  - Tests: 2 browser.
+- **2026-10-26** — Editor usability, release 1 (release v0.0.66; `src/codeHighlight.ts`,
+  `web/lib/places.ts`, `web/ui/lightbox.ts`).
+  - **`[[` finds headings and aliases:** `[[Note#` lists that note's headings (`[[#` this
+    note's), and a note's aliases are suggested, written as `[[Note|Alias]]`.
+  - **Word count:** words and reading time at the bottom right of a note on a laptop, or the
+    selection's words; properties don't count. Published pages' reading time uses the same count.
+  - **Pasted pictures are named after the note** (`Kitchen plan.png`, then `Kitchen plan 1.png`),
+    not `Pasted image 2026…`.
+  - **Notes reopen where you left them:** cursor and scroll, per device, for the last 200
+    notes; forgotten at sign-out.
+  - **Code blocks:** coloured by language (JavaScript, TypeScript, Python, SQL, JSON, YAML, HTML,
+    CSS, shell) in the editor, reading view and published pages; in Live Preview a language
+    picker and Copy on the block, Copy in reading view.
+  - **Click a picture to see it on its own** (Escape or a click closes it).
+  - Tests: 5 unit, 6 browser. New dependencies (MIT): `@codemirror/lang-javascript`, `-python`,
+    `-sql`, `-json`, `-css`, `-html`, `@codemirror/legacy-modes`.
+- **2026-10-26** — Full-width editor (release v0.0.65; `web/lib/editorWidth.ts`).
+  - The **↔** button beside the view switch, ⌘K **Full-width editor** / **Normal editor width**,
+    or Settings → Account → Appearance: every note's text fills the space between the side panels
+    and follows them as they open, close or are dragged. Kept on this device; focus mode keeps its
+    reading width. A browser test.
+- **2026-10-26** — F28 part 2, writing blocks from Confluence (release v0.0.64; `web/lib/look.ts`,
+  `web/lib/embeds.ts`, `src/weblinks.ts`, design in [design/F28.md](design/F28.md)).
+  - **Emoji:** `:rocket` suggests emoji as you type and writes the emoji itself.
+  - **Icon, cover and width:** **Icon…**, **Cover picture…** (upload or a web address) and
+    **Wide page** in the note's ⋯ menu and ⌘K, written as `icon:`, `cover:` and `width:`
+    properties. The icon shows by the title and in the file list.
+  - **Link cards:** a web address on a line of its own shows as a card with the page's title,
+    summary, site and picture, in Live Preview and reading view, from the weblinks' safe fetch
+    (`/api/vaults/:v/linkcard`, cached a day).
+  - Tests: 2 unit, an e2e of the card route, a browser test. New dependency: `unicode-emoji-json`
+    (MIT), loaded only when first needed.
+- **2026-10-26** — F28 part 1, writing blocks from Confluence (release v0.0.63; `src/blocks.ts`,
+  `web/lib/livePreview.ts`, `web/lib/render.ts`, `src/publish.ts`).
+  - **Expand:** `> [!note]-` is a callout that opens and closes, closed to start (`+`: open). A
+    chevron in Live Preview (a view only, the note doesn't change), `<details>` in reading view
+    and on published sites, so it works with no script.
+  - **Status:** `:status[On track]{.green}` (the generic directive syntax) shows as a coloured
+    label; `/status` asks for the words and colour.
+  - **Table of contents:** `[TOC]` on its own line lists the note's headings as links, in Live
+    Preview (a click moves to the heading), reading view and published sites.
+  - **Dates:** `//` offers today, tomorrow, yesterday, the coming week and a picker; `/date` opens
+    the picker. Written as `2026-10-26`.
+  - Tests: 2 unit, 3 browser.
+- **2026-10-26** — F27, relationships between any notes (release v0.0.62; `src/types.ts`
+  `RELS`, `web/lib/propertiesWidget.ts`). **Add relationship** (under the properties, in ⌘K, the
+  `/` menu and the note's ⋯ menu) says how a note relates to another, with AI-XF's
+  relationships: Part of, Depends on, Supersedes, References and the rest. It picks the notes this
+  one already links to first, and writes a property named after the relationship
+  (`part-of: "[[Onboarding]]"`), the same one way to write relations as a type's. The other note
+  shows the inverse in the side panel (*Has part*, *Depended on by*). It's how to make
+  Confluence's parent and child pages without a page tree. Tests: a browser test.
+- **2026-10-26** — The journal, F24 release 2 (release v0.0.61; `src/dayone.ts`,
+  `web/lib/journal.ts`, design in [design/F24.md](design/F24.md)).
+  - **Import from Day One:** on the journal page (or ⌘K), choose Day One's JSON export. It's
+    counted first ("Import 359 entries from Day One?"), then each entry goes into its day's daily
+    note under `## Journal` at the time it was written, with titles in bold, tags as #tags, and
+    photos and files stored and shown where they were. Importing again adds nothing. Checked
+    against a real export: 383 entries, 24 empty, 359 imported over 225 days, each reading back
+    unchanged.
+  - **Reflect on this week** (⌘K) opens the assistant with the last seven days of your journal
+    and a request to reflect on them, changing nothing.
+  - **Tests:** 3 unit, an e2e import (times across midnight and zones, a photo, a second import,
+    a dry run, viewers refused, junk refused), and browser tests of the import and of Reflect.
+- **2026-10-26** — Spelling and grammar help, Grammarly-friendly (release v0.0.60;
+  `web/lib/writingAids.ts`, `web/components/Editor.tsx`). The editor library switches off spell
+  check, autocorrect, capitals and writing suggestions for the whole note, which silenced the
+  browser's spell check, the iPhone keyboard's help and Grammarly. They're now on in prose, and
+  left off in code blocks, the properties at the top, inline code and links. A switch in Settings
+  → Account → Writing (and ⌘K) turns them off, remembered per device. Tests: a browser test of
+  where the help is on and off, and the switch. Grammarly itself wasn't available to test here:
+  try it on the laptop and with its iPhone keyboard.
+- **2026-10-26** — N16, the iPhone formatting bar (release v0.0.59; `web/main.tsx`,
+  `web/styles/format-bar.css`). With the keyboard up, the bar under the note showed an empty
+  second row: room kept for the home indicator, which the keyboard covers. The app now notes when
+  the keyboard takes the screen (`keyboard-up` on the page, from the visual viewport it already
+  follows), and the bar then keeps no such room. A browser test checks the rule; the real check is
+  on an iPhone.
+- **2026-10-26** — `#Type` inline, F26 (release v0.0.58; `web/components/Editor.tsx`, design in
+  [design/F26.md](design/F26.md)).
+  - In the editor, `#` and the start of a type's name offers **New Person…** after the tags.
+    Choose it, type the name (`#Person Sam Okafor`) and press Enter: the note is made from the
+    type's template and `[[Sam Okafor]]` is left in its place. An existing note of that name is
+    linked instead. Undo brings back what was typed, in one step.
+  - A tag typed by hand with a type's name stays a tag: only the menu choice starts this.
+  - **Tests:** a browser test on the laptop and the iPhone (make, link, Undo, and a hand-typed
+    tag left alone).
+- **2026-10-26** — Sign-in for MCP clients, F25 (release v0.0.57; `src/oauth.ts`,
+  `web/components/OAuthConsent.tsx`, design in [design/F25.md](design/F25.md)).
+  - **claude.ai and the Claude apps:** add Commonplace as a custom connector in claude.ai
+    (Settings → Connectors) with the address Connect Claude shows. Claude sends you to
+    Commonplace, which asks **Let Claude use your notes?**, with **Read only** as a choice. The
+    Claude iPhone and desktop apps then have it too. Claude Code can sign in the same way.
+  - **How:** OAuth 2.1 with PKCE, as the MCP authorization spec asks: the well-known metadata,
+    dynamic client registration, the consent page, and a token endpoint. Access tokens last an
+    hour and refresh tokens change on every use. Only hashes are stored, and no token goes in a URL.
+  - **Connections** lists each app that has signed in ("signed in from claude.ai"), and
+    **Disconnect** ends it at once, refresh token included. Pasted tokens work as before.
+  - **Safety:** the consent page names the app and where it returns to, and asks you to allow only
+    apps you've just added. Return addresses must be https, loopback http or an app's own scheme,
+    and match what was registered; an untrustworthy request is explained, never redirected.
+  - **Tests:** 2 e2e tests (the official MCP client signs in end to end, then refresh, expiry,
+    revoking, a client without a secret, read only, and the refusals), a browser test of the
+    consent page, and axe on it, laptop and iPhone, light and dark.
+- **2026-10-25** — The journal, F24 release 1 (release v0.0.56; `src/journal.ts`, `JournalPage.tsx`,
+  `JournalEntry.tsx`, help page `journal.md`).
+  - **New journal entry**, from ⌘K, a note's ⋯ menu, or press-and-hold (right-click on a laptop)
+    on Today. It opens a short sheet (⌘Enter adds the entry).
+  - **Where entries go:** today's daily note in your home collection, under `## Journal` as
+    `### HH:MM` and the text, by your device's clock. The daily note is made from your daily
+    template if there's none yet. Entries are added live-safely (a function passed to
+    `overwriteContent`), so typing in today's note isn't undone.
+  - **The Journal page** (under Tasks in the file panel, or ⌘K) shows each day's entries
+    newest first, On this day from earlier years, a calendar, and Earlier days.
+  - **The assistant and MCP** have `add_journal_entry`, a write tool with a preview.
+  - **Websites:** `## Journal` sections are always left off published sites.
+  - **Fixed on the way:** the day calendar was an ARIA grid without rows or cells (axe). It's
+    now a labelled group.
+  - **Tests:** 3 unit, 3 e2e (writing to home, the page and On this day, roles and bad input),
+    an MCP call, a publish check, 2 browser tests and axe on the page, laptop and iPhone, light
+    and dark. Day One import and Reflect on this week are release 2.
 - **2026-10-25** — N15, a review of v0.0.45 to v0.0.54 (release v0.0.55). A code review and a
   security review were run over the range. The security review found nothing that met its bar.
   Everything both reviews raised is fixed, each with a test:

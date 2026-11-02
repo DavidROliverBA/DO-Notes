@@ -2,6 +2,8 @@
 // viewer (read only — enforced in the API and in the live-collaboration socket). Every access
 // check reads vault_members; invitations (vault_invites) grant nothing until accepted.
 
+import { notify } from "./notifications";
+import { settings } from "./settings";
 import { HttpError, type User, validateEmail } from "./auth";
 import { sql } from "./db";
 
@@ -18,6 +20,10 @@ export interface Vault {
   git_repo?: string | null;
   /** The person's home collection (F20). */
   home?: boolean;
+  /** Where its folder is on the Mac, when it's kept in one (F22). */
+  folder?: string | null;
+  /** New notes get an AI-XF id (F9). */
+  note_ids?: boolean;
 }
 
 export async function listVaults(userId: number): Promise<Vault[]> {
@@ -25,7 +31,9 @@ export async function listVaults(userId: number): Promise<Vault[]> {
     select v.id, v.name, m.role,
       (select count(*)::int from notes n where n.vault_id = v.id) as note_count,
       (select count(*)::int from vault_members mm where mm.vault_id = v.id) as member_count,
-      (select g.repo from vault_git g where g.vault_id = v.id) as git_repo
+      (select g.repo from vault_git g where g.vault_id = v.id) as git_repo,
+      (select f.root from vault_folder f where f.vault_id = v.id) as folder,
+      v.aixf_ids as note_ids
     from vaults v join vault_members m on m.vault_id = v.id and m.user_id = ${userId}
     order by v.name`.then(async (list) => {
     const home = await homeOf(userId);
@@ -55,7 +63,7 @@ export async function createVault(user: User, name: string): Promise<Vault> {
   const clean = name.trim();
   if (!clean) throw new HttpError(400, "Collection name is required");
   return sql.begin(async (tx) => {
-    const [v] = await tx`insert into vaults (name, created_by) values (${clean}, ${user.id}) returning id, name`;
+    const [v] = await tx`insert into vaults (name, created_by, aixf_ids) values (${clean}, ${user.id}, ${settings.aixfIds}) returning id, name`;
     await tx`insert into vault_members (vault_id, user_id, role) values (${v!.id}, ${user.id}, 'owner')`;
     return { id: v!.id, name: v!.name, role: "owner" as Role, note_count: 0, member_count: 1 };
   });
@@ -80,6 +88,10 @@ export const canWrite = (role: Role) => RANK[role] >= RANK.editor;
 export async function renameVault(vaultId: number, name: string): Promise<void> {
   if (!name.trim()) throw new HttpError(400, "Collection name is required");
   await sql`update vaults set name = ${name.trim()} where id = ${vaultId}`;
+}
+
+export async function setNoteIds(vaultId: number, on: boolean): Promise<void> {
+  await sql`update vaults set aixf_ids = ${on} where id = ${vaultId}`;
 }
 
 export async function deleteVault(vaultId: number): Promise<void> {
@@ -116,6 +128,14 @@ export async function setMember(vaultId: number, email: string, role: Role, invi
       insert into vault_invites (vault_id, email, role, invited_by) values (${vaultId}, ${clean}, ${role}, ${invitedBy.id})
       on conflict (vault_id, email) do update set role = excluded.role, invited_by = excluded.invited_by`;
     return { status: "invited" as const };
+  }).then(async (r) => {
+    // F39: told under the bell, if they have an account (what the inviter sees is the same either way).
+    if (r.status === "invited") {
+      const [u] = await sql`select id from users where email = ${clean}`;
+      const [v] = await sql`select name from vaults where id = ${vaultId}`;
+      if (u) await notify({ userId: Number(u.id), kind: "invite", actorId: invitedBy.id, vaultId, text: `${invitedBy.name} invited you to “${v?.name}” as ${role === "editor" ? "an editor" : role === "owner" ? "an owner" : "a viewer"}` });
+    }
+    return r;
   });
 }
 
@@ -150,11 +170,15 @@ export async function acceptInvite(user: User, inviteId: number): Promise<Vault>
   const vaultId = await sql.begin(async (tx) => {
     const [i] = await tx`
       delete from vault_invites i where i.id = ${inviteId} and i.email = ${user.email.toLowerCase()} and exists (select 1 from vault_members o where o.vault_id = i.vault_id and o.user_id = i.invited_by and o.role = 'owner')
-      returning i.vault_id, i.role`;
+      returning i.vault_id, i.role, i.invited_by`;
     if (!i) throw new HttpError(404, "That invitation is no longer open");
     // Already a member (added some other way meanwhile): keep the role they have.
     await tx`insert into vault_members (vault_id, user_id, role) values (${i.vault_id}, ${user.id}, ${i.role}) on conflict (vault_id, user_id) do nothing`;
-    return Number(i.vault_id);
+    return { id: Number(i.vault_id), by: Number(i.invited_by) };
+  }).then(async (r) => {
+    const [v] = await sql`select name from vaults where id = ${r.id}`;
+    await notify({ userId: r.by, kind: "accepted", actorId: user.id, vaultId: r.id, text: `${user.name} joined “${v?.name}”` });
+    return r.id;
   });
   return (await listVaults(user.id)).find((v) => v.id === vaultId)!;
 }

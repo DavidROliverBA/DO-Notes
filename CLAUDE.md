@@ -65,6 +65,8 @@ key flows, decisions); read it before structural changes, and keep it current wh
   (`site_pages`, `site_files`), never `notes` or `attachments`; anything new on a page must be
   written into the snapshot at Publish, and must leave out what isn't published (titles
   included). Pages run no script: keep the CSP, and never let a note's HTML attributes through.
+  One note shared by link (F38, `src/shareLink.ts`, `/s/<slug>/`) follows the same rules: a
+  snapshot of the page and its files, no script, other notes as plain words.
   The builder's preview (`previewSite`) is the one reader of live notes: owners only, drawn by
   the same `respond`, showing only what Publish would include, in a frame with no scripts.
 - **Sharing is by invitation** (N13, `src/vaults.ts`): adding someone writes `vault_invites`;
@@ -83,6 +85,17 @@ key flows, decisions); read it before structural changes, and keep it current wh
 - No secrets in the repo; `.env` is gitignored and `.env.example` documents the shape.
 
 ## Words
+
+The product is called **DO Notes** (2026-11-02; it was **Skein** from F34, 2026-11-01, which was
+hard to say): that's the name people see, in the app, help, icons and messages. The repository,
+code, bundle ids, the `commonplace://` scheme, user-agent markers (`CommonplaceApp/`), the
+database, routes, storage keys, paths such as `~/Commonplace` and the Render service keep
+**commonplace**: never rename those.
+
+The repository is copied to the public `commonplace-md` at each release, so nothing in it names a
+real person but David, an employer, the live server's address or the Apple team id: those live
+in `.env`, `ios/Config/Local.xcconfig` and Render, which aren't in git. Made-up names only in
+tests, mockups and screenshots.
 
 People see **library** (the whole server, named in Settings → Admin; `server_info.library`) and
 **collections** (separate sets of notes with their own members). The code, database, API routes

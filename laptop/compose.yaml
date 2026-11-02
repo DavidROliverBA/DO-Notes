@@ -1,7 +1,8 @@
 # Commonplace on a laptop: the app and its own Postgres (with pgvector), nothing else.
 # Use ./commonplace.sh (start, stop, backup, …) or plain `docker compose` from this folder.
 # Reachable only from this machine (127.0.0.1) unless COMMONPLACE_LISTEN says otherwise.
-# Data lives in the commonplace-laptop-data volume.
+# Data lives in the commonplace-laptop-data volume; collections kept in folders (F22) live in
+# COMMONPLACE_FOLDERS on this computer (~/Commonplace unless .env says otherwise).
 name: commonplace-laptop
 
 services:
@@ -26,8 +27,19 @@ services:
       RELAX_API_KEY: ${RELAX_API_KEY:-}
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      # Collections kept in a folder of Markdown on this computer (F22): COMMONPLACE_FOLDERS is
+      # mounted here, and each such collection is a folder inside it.
+      FOLDERS_ROOT: /folders
+      # Sign in to a cloud Commonplace and show its collections here too (F23).
+      CLOUD_LINK: "true"
+      FOLDERS_LABEL: ${COMMONPLACE_FOLDERS_LABEL:-~/Commonplace}
+      # Connections (F33) may reach services on this computer: from inside the container, use
+      # http://host.docker.internal:<port>/mcp. The cloud never allows this.
+      CONNECTIONS_ALLOW_LOCAL: "true"
       # No SETUP_TOKEN on purpose: the server makes one for the first account and prints it in the
       # log, which ./commonplace.sh start shows you.
+    volumes:
+      - "${COMMONPLACE_FOLDERS:-${HOME}/Commonplace}:/folders"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

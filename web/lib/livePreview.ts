@@ -7,7 +7,8 @@
 import { syntaxTree } from "@codemirror/language";
 import { type EditorState, type Range, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
-import { findWikiLinks, isAttachmentPath } from "../../src/markdown";
+import { STATUS_ALL, statusColour, TOC_RE, tocHtml, WEB_LINE } from "../../src/blocks";
+import { findWikiLinks, headings, isAttachmentPath } from "../../src/markdown";
 import type { NoteSummary } from "./api";
 import { resolveLocal } from "./links";
 import { readProps } from "./frontmatter";
@@ -19,8 +20,11 @@ import { iconElement } from "../ui/Icon";
 import { drawDiagrams } from "./mermaid";
 import { fileUrl, renderMarkdown } from "./render";
 import { colourOf, hiloColour } from "./colours";
-import { type EmbedCtx, fillCard, fillEmbed } from "./embeds";
+import { type EmbedCtx, fillCard, fillEmbed, fillWebCard } from "./embeds";
 import { TableEditWidget } from "./tableWidget";
+import { CODE_LANGUAGES } from "../../src/codeHighlight";
+import { chooseDialog, toast, toastError } from "../ui/overlays";
+import { openLightbox } from "../ui/lightbox";
 
 /** One table cell's markdown as HTML (the paragraph wrapper removed). */
 function inlineHtml(md: string, cfg: LivePreviewConfig): string {
@@ -76,6 +80,25 @@ class NoteBlockWidget extends WidgetType {
   }
 }
 
+/** The markers around Floe's part of a note (F41): a quiet label for the start, a rule for the end. */
+class FloeMark extends WidgetType {
+  constructor(readonly start: boolean) {
+    super();
+  }
+  eq(o: FloeMark) {
+    return o.start === this.start;
+  }
+  toDOM() {
+    const div = document.createElement("div");
+    div.className = `cm-lp-block cm-floe-mark ${this.start ? "cm-floe-start" : "cm-floe-end"}`;
+    if (this.start) div.textContent = "From Floe · Update from Floe replaces this part";
+    return div;
+  }
+  ignoreEvent() {
+    return false;
+  }
+}
+
 class TypeDefLine extends WidgetType {
   constructor(readonly onEditYaml: (view: EditorView) => void) {
     super();
@@ -120,10 +143,13 @@ class ImageWidget extends WidgetType {
     img.alt = this.alt;
     img.loading = "lazy";
     if (this.width) img.width = Number(this.width);
+    // A click shows it on its own; clicking beside it puts the cursor on its line to edit.
+    img.addEventListener("mousedown", (e) => e.preventDefault());
+    img.addEventListener("click", () => openLightbox(this.src, this.alt));
     return img;
   }
-  ignoreEvent() {
-    return false;
+  ignoreEvent(e: Event) {
+    return e.type === "mousedown" || e.type === "click";
   }
 }
 
@@ -218,6 +244,11 @@ function build(view: EditorView, cfg: LivePreviewConfig, onOpenLink: (target: st
             const fence = /^\s*(```|~~~)/.test(line.text) && name === "FencedCode";
             lineDeco(pos, fence ? "cm-lp-codeblock cm-lp-fence" : "cm-lp-codeblock");
             pos = line.to + 1;
+          }
+          if (name === "FencedCode") {
+            const open = doc.lineAt(node.from);
+            const info = (FENCE.exec(open.text)?.[3] ?? "").toLowerCase();
+            if (!NOT_CODE.has(info)) decos.push(Decoration.widget({ widget: new CodeBarWidget(open.from, info), side: 1 }).range(open.to));
           }
           return false;
         }
@@ -379,6 +410,20 @@ function build(view: EditorView, cfg: LivePreviewConfig, onOpenLink: (target: st
           decos.push(hide.range(b - 2, b));
         }
       }
+      // :status[Done]{.green}: a coloured label (F28); the syntax shows on the cursor's line.
+      for (const m of line.text.matchAll(STATUS_ALL)) {
+        const a = line.from + m.index!;
+        const b = a + m[0].length;
+        if (!free(a, b)) continue;
+        claimed.push([a, b]);
+        const labelFrom = a + ":status[".length;
+        const labelTo = labelFrom + m[1]!.length;
+        decos.push(Decoration.mark({ class: `status status-${statusColour(m[2])}` }).range(labelFrom, labelTo));
+        if (!active.has(line.number)) {
+          decos.push(hide.range(a, labelFrom));
+          decos.push(hide.range(labelTo, b));
+        }
+      }
       // Colour tags: <mark style="background: …">, <span style="color: …">, <font color="…">
       for (const m of line.text.matchAll(/<(mark|span|font)\b([^>]*)>([^<]*)<\/\1>/gi)) {
         const a = line.from + m.index!;
@@ -409,6 +454,183 @@ const setFocus = StateEffect.define<boolean>();
 
 /** Dispatch when the vault's note list changes, so [[links]] re-resolve (and lose "unresolved"). */
 export const refreshLivePreview = StateEffect.define<null>();
+
+/** A folding callout (`> [!note]-`, F28's Expand) opened or closed by its chevron: where it
+ *  starts. Folding is a view of the note, so it never changes the text. */
+const flipFold = StateEffect.define<number>();
+const flippedFolds = StateField.define<readonly number[]>({
+  create: () => [],
+  update(v, tr) {
+    let next = tr.docChanged ? v.map((p) => tr.changes.mapPos(p)) : v;
+    for (const e of tr.effects) if (e.is(flipFold)) next = next.includes(e.value) ? next.filter((p) => p !== e.value) : [...next, e.value];
+    return next;
+  },
+});
+
+/** A code block's bar, at the end of its opening fence: its language (a picker when editable)
+ *  and Copy. Fences ending the block, and diagrams and queries, have none. */
+const FENCE = /^(\s*)(`{3,}|~{3,})\s*(\S*)(.*)$/;
+const NOT_CODE = new Set(["mermaid", "dataview", "dataviewjs"]);
+class CodeBarWidget extends WidgetType {
+  constructor(
+    readonly at: number,
+    readonly info: string,
+  ) {
+    super();
+  }
+  eq(o: CodeBarWidget) {
+    return o.at === this.at && o.info === this.info;
+  }
+  toDOM(view: EditorView) {
+    const bar = document.createElement("span");
+    bar.className = "cm-lp-codebar";
+    const button = (label: string, cls: string, run: () => unknown) => {
+      const b = bar.appendChild(document.createElement("button"));
+      b.type = "button";
+      b.className = cls;
+      b.textContent = label;
+      b.addEventListener("mousedown", (e) => e.preventDefault());
+      b.addEventListener("click", (e) => {
+        e.preventDefault();
+        void Promise.resolve().then(run).catch(toastError);
+      });
+      return b;
+    };
+    const known = CODE_LANGUAGES.find((l) => l.name === this.info || l.aliases.includes(this.info));
+    const lang = button(known?.label ?? (this.info || "Plain text"), "cm-lp-codelang", () => this.pickLanguage(view));
+    lang.title = "Language";
+    button("Copy", "cm-lp-codecopy", async () => {
+      await navigator.clipboard.writeText(codeAt(view.state, this.at));
+      toast("Code copied");
+    }).setAttribute("aria-label", "Copy code");
+    return bar;
+  }
+  async pickLanguage(view: EditorView) {
+    if (view.state.readOnly) return;
+    const name = await chooseDialog({
+      title: "Language",
+      placeholder: "Find a language…",
+      options: [{ value: "", label: "Plain text" }, ...CODE_LANGUAGES.map((l) => ({ value: l.name, label: l.label, hint: l.name }))],
+    });
+    if (name === null) return;
+    const line = view.state.doc.lineAt(this.at);
+    const m = FENCE.exec(line.text);
+    if (!m) return;
+    const text = `${m[1]}${m[2]}${name}${name && m[4] && !m[4].startsWith(" ") ? " " : ""}${m[4]}`;
+    view.dispatch({ changes: { from: line.from, to: line.to, insert: text }, userEvent: "input" });
+  }
+  ignoreEvent() {
+    return true;
+  }
+}
+/** The code inside the block whose opening fence is on `at`'s line. */
+function codeAt(state: EditorState, at: number): string {
+  const doc = state.doc;
+  const first = doc.lineAt(at);
+  const fence = FENCE.exec(first.text)?.[2] ?? "```";
+  const out: string[] = [];
+  for (let n = first.number + 1; n <= doc.lines; n++) {
+    const t = doc.line(n).text;
+    if (t.trim().startsWith(fence[0]!.repeat(3)) && /^\s*(`{3,}|~{3,})\s*$/.test(t)) break;
+    out.push(t);
+  }
+  return out.join("\n");
+}
+
+class FoldWidget extends WidgetType {
+  constructor(
+    readonly at: number,
+    readonly open: boolean,
+  ) {
+    super();
+  }
+  eq(o: FoldWidget) {
+    return o.at === this.at && o.open === this.open;
+  }
+  toDOM(view: EditorView) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = `cm-lp-fold${this.open ? " open" : ""}`;
+    b.textContent = "›";
+    b.setAttribute("aria-label", this.open ? "Close" : "Open");
+    b.setAttribute("aria-expanded", String(this.open));
+    b.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      view.dispatch({ effects: flipFold.of(this.at) });
+    });
+    return b;
+  }
+  ignoreEvent() {
+    return true;
+  }
+}
+/** A web address on its own line, as a card; the link opens the page, a click elsewhere shows
+ *  the address to edit. Until the page is read (or if it can't be), the plain link. */
+class WebCardWidget extends WidgetType {
+  constructor(
+    readonly url: string,
+    readonly vaultId: number,
+  ) {
+    super();
+  }
+  eq(o: WebCardWidget) {
+    return o.url === this.url;
+  }
+  toDOM(view: EditorView) {
+    const div = document.createElement("div");
+    div.className = "cm-lp-block cm-lp-webcard web-card markdown";
+    const a = document.createElement("a");
+    a.href = this.url;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.textContent = this.url;
+    const p = document.createElement("p");
+    p.append(a);
+    div.append(p);
+    void fillWebCard(div, this.url, this.vaultId).then(() => view.requestMeasure());
+    div.addEventListener("mousedown", (e) => {
+      if ((e.target as HTMLElement).closest("a")) return;
+      e.preventDefault();
+      view.focus();
+      view.dispatch({ selection: { anchor: view.posAtDOM(div) } });
+    });
+    return div;
+  }
+  ignoreEvent() {
+    return true;
+  }
+}
+
+/** [TOC]: the note's headings; a click on one moves there, elsewhere shows the line. */
+class TocWidget extends WidgetType {
+  readonly key: string;
+  constructor(readonly hs: ReturnType<typeof headings>) {
+    super();
+    this.key = JSON.stringify(hs);
+  }
+  eq(o: TocWidget) {
+    return o.key === this.key;
+  }
+  toDOM(view: EditorView) {
+    const div = document.createElement("div");
+    div.className = "cm-lp-block cm-lp-toc markdown";
+    const esc = (t: string) => t.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+    div.innerHTML = tocHtml(this.hs, () => "#", esc);
+    div.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      const a = (e.target as HTMLElement).closest<HTMLElement>("a.toc-link");
+      const h = a ? this.hs[Number(a.dataset.heading)] : undefined;
+      const at = h ? view.state.doc.line(Math.min(h.line + 1, view.state.doc.lines)).from : view.posAtDOM(div);
+      view.focus();
+      view.dispatch({ selection: { anchor: at }, scrollIntoView: true });
+    });
+    return div;
+  }
+  ignoreEvent() {
+    return true;
+  }
+}
+
 const refreshed = (u: { transactions: readonly { effects: readonly StateEffect<unknown>[] }[] }) =>
   u.transactions.some((tr) => tr.effects.some((e) => e.is(refreshLivePreview)));
 
@@ -589,6 +811,9 @@ function blockDecorations(state: EditorState, cfg: BlockConfig, focused: boolean
         const yaml = frontmatterYaml(src + "\n");
         if (yaml !== null && cfg.typeNote?.()) {
           decos.push(Decoration.replace({ widget: new TypeDefLine(editYaml), block: true }).range(node.from, node.to));
+        } else if (yaml !== null && (readProps(yaml) ?? []).length > 0 && readProps(yaml)!.every((p) => p.key === "id")) {
+          // Only its AI-XF id (F9): nothing to show. Source mode and Edit YAML still reach it.
+          decos.push(Decoration.replace({ block: true }).range(node.from, node.to));
         } else if (yaml !== null && readProps(yaml)) {
           decos.push(Decoration.replace({ widget: new PropertiesWidget(yaml, state.readOnly, editYaml), block: true }).range(node.from, node.to));
         } else {
@@ -610,10 +835,33 @@ function blockDecorations(state: EditorState, cfg: BlockConfig, focused: boolean
         decos.push(Decoration.replace({ widget, block: true }).range(from, to));
         return false;
       }
+      // A folding callout: a chevron, and closed, only its title line shows (F28's Expand).
+      if (node.name === "Blockquote") {
+        const first = state.doc.lineAt(node.from);
+        const m = /^\s*>\s*\[![\w-]+\]([+-])/.exec(first.text);
+        if (!m) return;
+        const last = state.doc.lineAt(node.to);
+        const open = (m[1] === "+") !== (state.field(flippedFolds, false) ?? []).includes(first.from);
+        decos.push(Decoration.widget({ widget: new FoldWidget(first.from, open), side: -1 }).range(first.from));
+        if (open || last.from === first.from || touched(first.to + 1, last.to)) return;
+        decos.push(Decoration.replace({}).range(first.to, last.to));
+        return false;
+      }
       // A line that is only ![[Note]] shows the note; only [[Typed note]], its card (F2).
       if (node.name === "Paragraph") {
         const line = state.doc.lineAt(node.from);
         if (line.to < node.to) return false;
+        // A web address alone: a card with the page's title and picture (F28).
+        const web = WEB_LINE.exec(line.text);
+        if (web) {
+          if (!touched(line.from, line.to)) decos.push(Decoration.replace({ widget: new WebCardWidget(web[1]!, cfg.vaultId), block: true }).range(line.from, line.to));
+          return false;
+        }
+        // [TOC] alone: the note's headings, each a jump (F28).
+        if (TOC_RE.test(line.text)) {
+          if (!touched(line.from, line.to)) decos.push(Decoration.replace({ widget: new TocWidget(headings(state.doc.toString())), block: true }).range(line.from, line.to));
+          return false;
+        }
         const m = /^\s*(!?)\[\[([^\[\]|\n]+?)(?:\|[^\]\n]*)?\]\]\s*$/.exec(line.text);
         if (!m || touched(line.from, line.to)) return false;
         const embed = m[1] === "!";
@@ -623,6 +871,15 @@ function blockDecorations(state: EditorState, cfg: BlockConfig, focused: boolean
         if (!embed && !(hit && typeNamed(hit.type)?.cards)) return false;
         const ctx = (): EmbedCtx => ({ vaultId: cfg.vaultId, notes: cfg.notes(), ancestors: [cfg.noteId?.() ?? -1], onOpen: (t) => cfg.onOpenLink(t, false) });
         decos.push(Decoration.replace({ widget: new NoteBlockWidget(embed ? "embed" : "card", target, `${hit?.id}:${hit?.updated_at}:${hit?.type}`, ctx), block: true }).range(line.from, line.to));
+        return false;
+      }
+      if (node.name === "CommentBlock") {
+        const src = state.doc.sliceString(node.from, node.to).trim();
+        const start = src === "<!-- floe -->";
+        if (!start && !/^<!-- \/floe(?: [0-9a-z]+)? -->$/.test(src)) return false;
+        const from = state.doc.lineAt(node.from).from;
+        const to = state.doc.lineAt(node.to).to;
+        if (!touched(from, to)) decos.push(Decoration.replace({ widget: new FloeMark(start), block: true }).range(from, to));
         return false;
       }
       if (node.name === "FencedCode") {
@@ -661,7 +918,7 @@ function blockField(cfg: BlockConfig) {
   const blocks = StateField.define<DecorationSet>({
     create: (s) => blockDecorations(s, cfg, false),
     update(deco, tr) {
-      const focusChanged = tr.effects.some((e) => e.is(setFocus) || e.is(refreshLivePreview));
+      const focusChanged = tr.effects.some((e) => e.is(setFocus) || e.is(refreshLivePreview) || e.is(flipFold));
       const roChanged = tr.state.readOnly !== tr.startState.readOnly;
       if (tr.docChanged || tr.selection || focusChanged || roChanged || syntaxTree(tr.startState) !== syntaxTree(tr.state)) {
         return blockDecorations(tr.state, cfg, tr.state.field(focus));
@@ -670,7 +927,7 @@ function blockField(cfg: BlockConfig) {
     },
     provide: (f) => EditorView.decorations.from(f),
   });
-  return [focus, blocks, EditorView.focusChangeEffect.of((_s, focusing) => setFocus.of(focusing))];
+  return [focus, flippedFolds, blocks, EditorView.focusChangeEffect.of((_s, focusing) => setFocus.of(focusing))];
 }
 
 class TextWidget extends WidgetType {

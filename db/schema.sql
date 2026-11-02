@@ -193,6 +193,30 @@ create index if not exists api_tokens_user on api_tokens (user_id);
 -- MCP tokens (scope 'mcp' or 'mcp:read') cover every vault the person can see: no vault.
 alter table api_tokens alter column vault_id drop not null;
 
+-- Sign-in for MCP clients (F25, src/oauth.ts). Anyone may register a client (as the MCP spec
+-- expects of claude.ai and others); one nobody signs in with is dropped after a day. A sign-in
+-- makes an ordinary 'mcp' or 'mcp:read' api_tokens row carrying the client, an access token that
+-- expires, and a refresh token (hashes only), so Connections lists it and revoking it ends it.
+create table if not exists oauth_clients (
+  id            text primary key,
+  name          text not null,
+  redirect_uris text[] not null,
+  secret_hash   text,
+  created_at    timestamptz not null default now()
+);
+create table if not exists oauth_codes (
+  code_hash     text primary key,
+  client_id     text not null references oauth_clients(id) on delete cascade,
+  user_id       bigint not null references users(id) on delete cascade,
+  redirect_uri  text not null,
+  challenge     text not null,
+  scope         text not null,
+  expires_at    timestamptz not null
+);
+alter table api_tokens add column if not exists client_id text references oauth_clients(id) on delete cascade;
+alter table api_tokens add column if not exists expires_at timestamptz;
+alter table api_tokens add column if not exists refresh_hash text unique;
+
 -- Bring-your-own AI assistants (F13, src/assistants.ts). Per person, never shared with vault
 -- members. The API key is encrypted with SECRETS_KEY (AES-256-GCM, src/secrets.ts) and never sent
 -- back to the browser: the settings show only its last four characters.
@@ -410,3 +434,278 @@ create table if not exists site_files (
   data     bytea not null,
   primary key (vault_id, path)
 );
+
+-- Folder vaults on the Mac (F22, src/folderSync.ts): a vault kept in step with a folder of
+-- Markdown under FOLDERS_ROOT. `root` is relative to it. 'folder': the folder is the master copy
+-- and wins any clash; 'both': a note changed on both sides that doesn't merge waits in
+-- folder_clashes. `paused_why` null while paused means a person paused it.
+create table if not exists vault_folder (
+  vault_id   bigint primary key references vaults(id) on delete cascade,
+  root       text not null,
+  mode       text not null default 'both',
+  created_by bigint references users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  paused_at  timestamptz,
+  paused_why text,
+  last_sync  timestamptz,
+  last_error text
+);
+-- Each file as both sides last agreed: `rel` is its path in the folder (a .markdown file keeps
+-- its name), `disk_hash` the md5 of its bytes there and `db_hash` the md5 of the text or bytes
+-- stored here (they differ when the file has a BOM or CRLF line endings). `mtime`/`size` let a
+-- scan skip reading files that haven't changed; `content` is a note's text, for merges.
+create table if not exists folder_files (
+  vault_id  bigint not null references vaults(id) on delete cascade,
+  path      text not null,
+  rel       text not null,
+  disk_hash text not null,
+  db_hash   text not null,
+  mtime     double precision not null default 0,
+  size      bigint not null default 0,
+  content   text,
+  primary key (vault_id, path)
+);
+-- Notes changed both here and in the folder that didn't merge line by line ('both' mode): the
+-- note keeps its text here until someone picks a side; `theirs` is the folder's (null = deleted).
+create table if not exists folder_clashes (
+  vault_id   bigint not null references vaults(id) on delete cascade,
+  path       text not null,
+  theirs     text,
+  created_at timestamptz not null default now(),
+  primary key (vault_id, path)
+);
+
+-- The cloud library, seen from the Mac (F23, src/remote.ts; only where CLOUD_LINK is set). One
+-- link per person: the cloud's address and endpoints, and the device token pair, sealed with
+-- SECRETS_KEY. Each cloud collection gets an id from the vaults sequence, so it can't be confused
+-- with a collection here (it has no vaults row), and is kept so the menu lists it offline.
+create table if not exists remote_links (
+  id            bigserial primary key,
+  user_id       bigint not null unique references users(id) on delete cascade,
+  url           text not null,
+  client_id     text not null,
+  token_url     text not null,
+  revoke_url    text,
+  access        text not null,
+  refresh       text not null,
+  expires_at    timestamptz not null,
+  cloud_user_id bigint,
+  cloud_email   text,
+  library       text,
+  created_at    timestamptz not null default now()
+);
+create table if not exists remote_vaults (
+  id           bigint primary key default nextval('vaults_id_seq'),
+  link_id      bigint not null references remote_links(id) on delete cascade,
+  remote_id    bigint not null,
+  name         text not null,
+  role         text not null,
+  note_count   int not null default 0,
+  member_count int not null default 1,
+  unique (link_id, remote_id)
+);
+
+-- F9: new notes get an AI-XF id written into their properties (kept out of sight in the app).
+-- On for every collection; a collection can turn it off. New collections take AIXF_IDS.
+alter table vaults add column if not exists aixf_ids boolean not null default true;
+
+-- F32: passkeys, to sign in with Face ID or Touch ID (WebAuthn). Only each passkey's public
+-- half is kept here; the secret half stays on the person's device or in iCloud Keychain.
+-- Removing one sets removed_at (so Undo can put it back); removed ones never sign in and are
+-- deleted after a day.
+create table if not exists passkeys (
+  id            bigserial primary key,
+  user_id       bigint not null references users(id) on delete cascade,
+  credential_id text not null unique,
+  public_key    bytea not null,
+  counter       bigint not null default 0,
+  transports    text[] not null default '{}',
+  name          text not null default '',
+  rp_id         text not null,
+  created_at    timestamptz not null default now(),
+  last_used_at  timestamptz,
+  removed_at    timestamptz
+);
+create index if not exists passkeys_user on passkeys(user_id);
+
+-- F30: each person's connections to knowledge outside Commonplace, for the in-app assistant
+-- only: Longview (an address and a read token) and Recall (signed in with OAuth, read scope).
+-- Tokens are sealed with SECRETS_KEY and never sent to the browser.
+create table if not exists user_connections (
+  user_id     bigint not null references users(id) on delete cascade,
+  kind        text not null,
+  address     text not null,
+  token_enc   text not null,
+  token_hint  text not null default '',
+  refresh_enc text,
+  expires_at  timestamptz,
+  token_url   text,
+  client_id   text,
+  created_at  timestamptz not null default now(),
+  primary key (user_id, kind)
+);
+-- Commonplace as an OAuth client of another server (Recall): its registration there, one per
+-- server and address it's reached at (the redirect). (oauth_clients is the other way round:
+-- apps registered with Commonplace's own MCP sign-in, F25.)
+create table if not exists outside_oauth_clients (
+  issuer       text not null,
+  redirect_uri text not null,
+  client_id    text not null,
+  created_at   timestamptz not null default now(),
+  primary key (issuer, redirect_uri)
+);
+
+-- F33: the connections manager. Each person's connections to services that meet the bar
+-- (docs/design/F33.md), read-only. A preset (Longview, Recall) fills in what it knows. Tokens
+-- are sealed with SECRETS_KEY and never sent to the browser. status: ok, review (a tool the
+-- person chose has changed since they reviewed it: nothing is offered until they look again).
+create table if not exists connections (
+  id             bigserial primary key,
+  user_id        bigint not null references users(id) on delete cascade,
+  name           text not null,
+  slug           text not null,
+  preset         text,
+  address        text not null,
+  auth           text not null,
+  token_enc      text,
+  token_hint     text not null default '',
+  refresh_enc    text,
+  expires_at     timestamptz,
+  token_url      text,
+  client_id      text,
+  status         text not null default 'ok',
+  server_name    text,
+  synced_at      timestamptz,
+  created_at     timestamptz not null default now(),
+  unique (user_id, slug)
+);
+-- Each connection's tools as the service last listed them, sorted by what they say they do
+-- (kind: read, unknown, changes; a tool that changes things is never enabled), with a hash of
+-- what the model would see, and the one the person reviewed (reviewed: what it said then).
+create table if not exists connection_tools (
+  connection_id  bigint not null references connections(id) on delete cascade,
+  name           text not null,
+  title          text,
+  description    text not null default '',
+  input_schema   jsonb not null default '{}',
+  annotations    jsonb,
+  kind           text not null,
+  enabled        boolean not null default false,
+  hash           text not null,
+  reviewed_hash  text,
+  reviewed       jsonb,
+  primary key (connection_id, name)
+);
+-- F30's two connections move across, once: each row leaves the old table as it arrives here (the
+-- empty table stays until a later release).
+with moved as (delete from user_connections returning *)
+insert into connections (user_id, name, slug, preset, address, auth, token_enc, token_hint, refresh_enc, expires_at, token_url, client_id, created_at)
+  select user_id, case kind when 'longview' then 'Longview' else 'Recall' end, kind, kind, address,
+         case kind when 'longview' then 'token' else 'oauth' end, token_enc, token_hint, refresh_enc, expires_at, token_url, client_id, created_at
+  from moved
+  on conflict (user_id, slug) do nothing;
+
+-- Reminders for dated tasks (F35, src/reminders.ts): on or off, and the time for a task that has
+-- only a date. The apps schedule the alerts; nothing else is stored.
+alter table users add column if not exists reminders_on boolean not null default true;
+alter table users add column if not exists reminder_time text not null default '09:00';
+
+-- "From your connections" in the side panel (F33 step 4, src/outsidePanel.ts): the read tool a
+-- connection looks the open note up with, by its title; null (the default) keeps it out of the panel.
+alter table connections add column if not exists panel_tool text;
+
+-- The words inside a file (src/fileText.ts): a PDF's text read on the server, a photo's words or a
+-- voice note's transcript read on the iPhone or Mac. Null: not read yet; '': read, none found.
+-- Searched by src/search.ts, which shows the notes that use the file.
+alter table attachments add column if not exists text text;
+alter table attachments add column if not exists text_search tsvector generated always as (to_tsvector('english', coalesce(text, ''))) stored;
+create index if not exists attachments_text_search on attachments using gin(text_search);
+
+-- One note shared by link (F38, src/shareLink.ts): a snapshot of its page and the files it shows,
+-- served at /s/<slug>/ with no script. `live` false keeps the snapshot for Undo.
+create table if not exists shared_notes (
+  id          bigserial primary key,
+  vault_id    bigint not null references vaults(id) on delete cascade,
+  note_id     bigint not null unique references notes(id) on delete cascade,
+  slug        text not null unique,
+  page        text not null,
+  title       text not null,
+  html        text not null,
+  source_md5  text not null,
+  live        boolean not null default true,
+  created_by  bigint references users(id) on delete set null,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+create table if not exists shared_note_files (
+  share_id  bigint not null references shared_notes(id) on delete cascade,
+  path      text not null,
+  mime      text not null,
+  data      bytea not null,
+  primary key (share_id, path)
+);
+
+-- Notifications and activity (F39, src/notifications.ts): what's new for each person (under the
+-- bell, and alerts from the apps), the notes they follow, and when they last looked at a collection.
+create table if not exists notifications (
+  id          bigserial primary key,
+  user_id     bigint not null references users(id) on delete cascade,
+  kind        text not null,
+  actor_id    bigint references users(id) on delete set null,
+  vault_id    bigint references vaults(id) on delete cascade,
+  note_id     bigint references notes(id) on delete cascade,
+  text        text not null,
+  created_at  timestamptz not null default now(),
+  read_at     timestamptz
+);
+create index if not exists notifications_user on notifications(user_id, id desc);
+create table if not exists note_follows (
+  user_id  bigint not null references users(id) on delete cascade,
+  note_id  bigint not null references notes(id) on delete cascade,
+  primary key (user_id, note_id)
+);
+create table if not exists vault_seen (
+  user_id  bigint not null references users(id) on delete cascade,
+  vault_id bigint not null references vaults(id) on delete cascade,
+  seen_at  timestamptz not null,
+  primary key (user_id, vault_id)
+);
+
+-- Comments on notes (L3, src/comments.ts): kept beside the note, never in its Markdown. A thread
+-- starts on quoted words, anchored by Yjs relative positions (base64), so it stays on them while
+-- the text around it is edited; replies have a parent. Resolved threads are kept, folded away.
+create table if not exists comments (
+  id           bigserial primary key,
+  vault_id     bigint not null references vaults(id) on delete cascade,
+  note_id      bigint not null references notes(id) on delete cascade,
+  author_id    bigint references users(id) on delete set null,
+  parent_id    bigint references comments(id) on delete cascade,
+  quote        text not null default '',
+  anchor_from  text,
+  anchor_to    text,
+  body         text not null,
+  created_at   timestamptz not null default now(),
+  edited_at    timestamptz,
+  resolved_at  timestamptz,
+  resolved_by  bigint references users(id) on delete set null
+);
+create index if not exists comments_note on comments(note_id, created_at);
+
+-- Two-step sign-in (F40, src/twoStep.ts): a code app's secret, sealed with SECRETS_KEY, and the
+-- last 30-second step used so a code can't be used twice; single-use recovery codes, as hashes;
+-- and an account that signs in with passkeys only (its password is one nobody knows).
+alter table users add column if not exists totp_secret text;
+alter table users add column if not exists totp_last_step bigint;
+alter table users add column if not exists password_off boolean not null default false;
+create table if not exists recovery_codes (
+  id         bigserial primary key,
+  user_id    bigint not null references users(id) on delete cascade,
+  code_hash  text not null,
+  used_at    timestamptz
+);
+create index if not exists recovery_codes_user on recovery_codes(user_id);
+
+-- Send to Longview (F30 step 4, src/sendLongview.ts): a second Longview token, one that can save,
+-- sealed, beside the read-only connection and used only for save_url.
+alter table connections add column if not exists send_enc text;
+alter table connections add column if not exists send_hint text;

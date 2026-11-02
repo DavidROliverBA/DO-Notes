@@ -38,3 +38,29 @@
   white-space: normal;
   overflow-wrap: anywhere;
 }
+
+/* Take the tour and What's new, above the topics. */
+.help-tour {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 4px 12px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+/* Real buttons, not topics: undo the topic list's plain style. */
+.settings-nav .help-tour button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  width: auto;
+  padding: 8px 14px;
+}
+.settings-nav .help-tour button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}

@@ -22,7 +22,25 @@ if (vv) {
     if (h === height) return;
     height = h;
     document.documentElement.style.setProperty("--vvh", h);
+    // The keyboard is up when it takes a good part of the screen (the suggestions bar alone
+    // doesn't). It then covers the home indicator, so the formatting bar drops the room it keeps
+    // for it (styles/format-bar.css), which otherwise showed as an empty second row (N16).
+    document.documentElement.classList.toggle("keyboard-up", window.innerHeight - vv.height > 120);
+    clearOfKeyboardBar();
   };
+  // iOS keeps a focused box above the keyboard, but not above the ˄ ˅ ✓ bar it floats over the
+  // page (which no page can hide), and pinning the app to the visual viewport stops iOS
+  // scrolling it anyway. So a box being typed in is scrolled into view with room under it for
+  // the bar (scroll-margin-bottom in styles/phone.css). The editor isn't moved: CodeMirror keeps
+  // its own cursor in view, above the formatting bar.
+  const clearOfKeyboardBar = () => {
+    const el = document.activeElement;
+    if (!document.documentElement.classList.contains("keyboard-up") || !(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)) return;
+    requestAnimationFrame(() => {
+      if (el.getBoundingClientRect().bottom > vv.height - parseFloat(getComputedStyle(el).scrollMarginBottom || "0")) el.scrollIntoView({ block: "nearest" });
+    });
+  };
+  document.addEventListener("focusin", clearOfKeyboardBar);
   const fit = () => {
     clearTimeout(later);
     const since = performance.now() - lastKey;

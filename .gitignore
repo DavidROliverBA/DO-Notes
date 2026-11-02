@@ -15,3 +15,20 @@ laptop/*.tar.gz
 * [0-9].ts
 * [0-9].tsx
 * [0-9].css
+# iPhone app (ios/README.md): XcodeGen writes these from ios/project.yml
+ios/*.xcodeproj/
+ios/App/Info.plist
+ios/App/*.entitlements
+ios/Share/Info.plist
+ios/Share/*.entitlements
+ios/Mac/Info.plist
+ios/Mac/*.entitlements
+ios/MacShare/Info.plist
+ios/Widget/Info.plist
+ios/MacShare/*.entitlements
+ios/build/
+ios/SafariClipper/Info.plist
+ios/SafariClipper/SafariClipper.entitlements
+ios/Config/Local.xcconfig
+# F42 mockup: Floe's layout engine (elkjs 0.12, EPL-2.0), copied from ~/Developer/floe node_modules
+docs/design/F42-elk.js

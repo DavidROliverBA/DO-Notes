@@ -5,11 +5,13 @@
 //
 // A typed note (F16) shows its type's properties too, even before they have values, with the
 // right editor for each: a menu for a select, a note picker for a relation, a type menu on `type`.
+// Any note can add a relationship (F27): an AI-XF rel as the key (`part-of`), a link as the value,
+// picked from the notes this one already links to first.
 
 import { type EditorView, WidgetType } from "@codemirror/view";
 import { linkTargets, type TypeProp, typeOf as typeNameOf } from "../../src/types";
 import { chooseDialog, toast, toastError } from "../ui/overlays";
-import { typeNamed, typesState } from "./types";
+import { relationKind, typeNamed, typesState } from "./types";
 import { deleteProp, emptyValue, minimalChange, type Prop, type PropType, type PropValue, readProps, renameProp, setProp } from "./frontmatter";
 
 const FM = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
@@ -81,7 +83,8 @@ export class PropertiesWidget extends WidgetType {
     head.append(yamlBtn);
     root.append(head);
 
-    for (const p of props) root.append(this.row(view, p, ro));
+    // The AI-XF id (F9) is kept out of sight: ⌘K or ⋯ → Copy the note's id.
+    for (const p of props) if (p.key !== "id") root.append(this.row(view, p, ro));
     // The type's properties this note doesn't have yet, ready to fill in.
     for (const s of this.schema) if (!props.some((p) => p.key === s.name)) root.append(this.ghostRow(view, s, ro));
 
@@ -105,7 +108,9 @@ export class PropertiesWidget extends WidgetType {
       };
       const btn = el("button", { className: "prop-add-btn", type: "button", textContent: "Add" });
       btn.onclick = add;
-      root.append(el("div", { className: "prop-add" }, name, type, btn));
+      const rel = el("button", { className: "prop-add-rel", type: "button", textContent: "Add relationship…" });
+      rel.onclick = () => openBuilder();
+      root.append(el("div", { className: "prop-add" }, name, type, btn), el("div", { className: "prop-add-rels" }, rel));
     }
 
     if (refocus) {
@@ -158,7 +163,9 @@ export class PropertiesWidget extends WidgetType {
       sel.onchange = () => set(sel.value || null);
       return sel;
     }
-    if (s?.kind === "relation" && !p.readOnly) return this.relationEditor(p, s, ro, set);
+    if (s?.kind === "relation" && !p.readOnly) return this.relationEditor(p, s, ro, set, view);
+    const r = !s && !p.readOnly && (p.type === "text" || p.type === "list") ? relationKind(p.key) : null;
+    if (r && (p.value === null || linkTargets(p.value).length)) return this.relationEditor(p, { name: p.key, kind: "relation", many: Array.isArray(p.value) }, ro, set, view, true);
     if (p.type === "checkbox") {
       const box = el("input", { type: "checkbox", className: "prop-input prop-check", checked: p.value === true, disabled: ro });
       box.onchange = () => set(box.checked);
@@ -196,7 +203,7 @@ export class PropertiesWidget extends WidgetType {
   }
 
   /** A relation: its links as pills, and + to pick a note of the target type. */
-  private relationEditor(p: Prop, s: TypeProp, ro: boolean, set: (v: PropValue) => void) {
+  private relationEditor(p: Prop, s: TypeProp, ro: boolean, set: (v: PropValue) => void, view: EditorView, grows = false) {
     const box = el("div", { className: "prop-pills prop-relation" });
     const links = linkTargets(p.value);
     links.forEach((t, i) => {
@@ -206,16 +213,18 @@ export class PropertiesWidget extends WidgetType {
         x.setAttribute("aria-label", `Remove ${t}`);
         x.onclick = () => {
           const rest = links.filter((_, j) => j !== i).map((l) => `[[${l}]]`);
-          set(s.many ? rest : (rest[0] ?? null));
+          // A relationship that loses its last note goes; a type's relation stays, empty.
+          if (grows && !rest.length) commit(view, (y) => deleteProp(y, p.key));
+          else set(s.many ? rest : (rest[0] ?? null));
         };
         pill.append(x);
       }
       box.append(pill);
     });
-    if (!ro && (s.many || !links.length)) {
+    if (!ro && (s.many || grows || !links.length)) {
       const add = el("button", { type: "button", className: "prop-relation-add", textContent: links.length ? "+" : `Choose ${s.type ? `a ${s.type}` : "a note"}…` });
       add.onclick = async () => {
-        const notes = this.candidates(s);
+        const notes = this.candidates(s, view);
         const choice = await chooseDialog({
           title: `${p.key}: choose ${s.type ? `a ${s.type}` : "a note"}`,
           options: notes.map((n) => ({ value: n.title, label: n.title, hint: n.folder })),
@@ -224,16 +233,15 @@ export class PropertiesWidget extends WidgetType {
         });
         if (!choice) return;
         const link = `[[${choice}]]`;
-        set(s.many ? [...links.map((l) => `[[${l}]]`), link] : link);
+        set(s.many || (grows && links.length) ? [...links.map((l) => `[[${l}]]`), link] : link);
       };
       box.append(add);
     }
     return box;
   }
 
-  /** Notes a relation can point at: of its type, if it names one. Set by the editor. */
-  private candidates(s: TypeProp): { title: string; folder?: string }[] {
-    return relationCandidates(s.type ?? null);
+  private candidates(s: TypeProp, view: EditorView) {
+    return candidates(s.type ?? null, view);
   }
 
   private listEditor(view: EditorView, p: Prop, ro: boolean) {
@@ -285,8 +293,25 @@ export function frontmatterYaml(src: string): string | null {
   return FM.exec(src)?.[1] ?? null;
 }
 
+/** Opens the relationship builder for this note (F31): set by the editor, which knows the note. */
+let openBuilder: () => void = () => {};
+export function setRelationshipOpener(fn: () => void) {
+  openBuilder = fn;
+}
+
 /** The vault's notes, for relation pickers: set by the editor, which has them. */
 let relationCandidates: (type: string | null) => { title: string; folder?: string }[] = () => [];
 export function setRelationCandidates(fn: typeof relationCandidates) {
   relationCandidates = fn;
 }
+
+/** Notes a relation can point at: of `type`, if given, with those this note already links to in
+ *  its text first. */
+function candidates(type: string | null, view: EditorView): { title: string; folder?: string }[] {
+  const all = relationCandidates(type);
+  const body = view.state.doc.sliceString(0, Math.min(view.state.doc.length, 200_000)).replace(FM, "");
+  const linked = new Set(linkTargets(body).map((t) => t.toLowerCase().split("/").pop()!));
+  const first = all.filter((n) => linked.has(n.title.toLowerCase())).map((n) => ({ ...n, folder: "Linked in this note" }));
+  return [...first, ...all.filter((n) => !linked.has(n.title.toLowerCase()))];
+}
+

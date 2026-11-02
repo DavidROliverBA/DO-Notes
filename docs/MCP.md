@@ -1,12 +1,32 @@
-# Connect Claude to Commonplace (MCP)
+# Connect Claude to DO Notes (MCP)
 
-Commonplace runs a [Model Context Protocol](https://modelcontextprotocol.io) server at `/mcp`.
+DO Notes runs a [Model Context Protocol](https://modelcontextprotocol.io) server at `/mcp`.
 With it, Claude Code, or any other agent that speaks MCP, can search, read and write your notes
 as you, in every collection you can see and with your role in each.
 
-## Connect
+## Connect claude.ai and the Claude apps
 
-1. In Commonplace, open **Settings → Connections → Connect Claude**. Name the connection, tick **Read only** if
+1. In claude.ai, open **Settings → Connectors** and choose **Add custom connector**.
+2. Name it *DO Notes* and paste `https://<your-commonplace>/mcp` as its address (Settings →
+   Connections → Connect Claude shows it, with a Copy button).
+3. Claude opens DO Notes. Sign in if you need to, and you're asked **Let Claude use your
+   notes?** Tick **Read only** if it should only look, and press **Allow**.
+
+The Claude iPhone and desktop apps then have the connector too. It's listed in Settings →
+Connections as *signed in from claude.ai*; **Disconnect** there ends its access at once.
+
+Behind this is OAuth 2.1 with PKCE, as the MCP authorization spec asks (`src/oauth.ts`): a 401
+from `/mcp` points to `/.well-known/oauth-protected-resource/mcp`, which names DO Notes as its
+own authorization server (`/.well-known/oauth-authorization-server`); clients register
+themselves (`/oauth/register`), send the person to `/oauth/authorize`, and swap the code at
+`/oauth/token`. Access tokens last an hour and the refresh token changes each time it's used.
+Any MCP client that signs in this way works, Claude Code included
+(`claude mcp add --transport http commonplace https://<your-commonplace>/mcp`, then `/mcp` and
+**Authenticate**).
+
+## Connect with a token
+
+1. In DO Notes, open **Settings → Connections → Connect Claude**. Name the connection, tick **Read only** if
    it should only look, and press **Create MCP token**.
 2. Copy the command it shows, and run it in a terminal:
 
@@ -42,8 +62,7 @@ it with `mcp-remote`:
 }
 ```
 
-claude.ai's custom connectors need OAuth sign-in, which Commonplace doesn't offer yet. It's
-in the backlog's ideas.
+A client that can sign in (above) doesn't need a token at all.
 
 ## Tools
 

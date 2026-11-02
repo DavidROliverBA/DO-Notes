@@ -8,6 +8,10 @@
   background: var(--bg2);
   padding: 4px 6px calc(4px + env(safe-area-inset-bottom));
 }
+/* The keyboard covers the home indicator, so the bar needs no room for it (web/main.tsx). */
+.keyboard-up .format-bar {
+  padding-bottom: 4px;
+}
 .format-bar button {
   background: none;
   border: none;

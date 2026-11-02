@@ -29,8 +29,12 @@ interface PromptOpts {
   placeholder?: string;
   action: string;
   danger?: boolean;
+  /** The action works with nothing typed (an optional reason). */
+  optional?: boolean;
   /** Only allow the action once the text equals this (typing a name to confirm a delete). */
   mustMatch?: string;
+  /** "date": the browser's date picker, answering YYYY-MM-DD. "password": hidden as typed. */
+  input?: "text" | "date" | "password";
 }
 export interface Choice {
   value: string;
@@ -100,7 +104,20 @@ export function toast(text: string, opts: { undo?: () => unknown; action?: Toast
   const t: Toast = { id: ++seq, text, tone: opts.tone ?? "info", action: opts.undo ? { label: "Undo", run: opts.undo } : opts.action };
   toasts = [...toasts.slice(-2), t];
   emit();
-  setTimeout(() => dismiss(t.id), t.action ? 8000 : t.tone === "error" ? 7000 : 4000);
+  later(t);
+}
+
+// An Undo stays long enough to read the message and decide; any toast waits while the pointer is
+// on it or focus is in it, and starts its time again on leaving.
+const timers = new Map<number, ReturnType<typeof setTimeout>>();
+const lifetime = (t: Toast) => (t.action ? 20_000 : t.tone === "error" ? 7000 : 4000);
+function later(t: Toast) {
+  clearTimeout(timers.get(t.id));
+  timers.set(t.id, setTimeout(() => dismiss(t.id), lifetime(t)));
+}
+function hold(t: Toast) {
+  clearTimeout(timers.get(t.id));
+  timers.delete(t.id);
 }
 
 /** Show an error as a toast, in the server's plain words. */
@@ -109,6 +126,8 @@ export function toastError(err: unknown): void {
 }
 
 function dismiss(id: number) {
+  clearTimeout(timers.get(id));
+  timers.delete(id);
   if (!toasts.some((t) => t.id === id)) return;
   toasts = toasts.filter((t) => t.id !== id);
   emit();
@@ -128,7 +147,14 @@ export function Overlays() {
       {top && (top.dialog.kind === "choose" ? <ChooseView key={top.id} pending={top} opts={top.dialog} /> : <DialogView key={top.id} pending={top} />)}
       <div className="toasts" role="status" aria-live="polite">
         {s.toasts.map((t) => (
-          <div key={t.id} className={`toast toast-${t.tone}`}>
+          <div
+            key={t.id}
+            className={`toast toast-${t.tone}`}
+            onPointerEnter={() => hold(t)}
+            onPointerLeave={(e) => !e.currentTarget.contains(document.activeElement) && later(t)}
+            onFocus={() => hold(t)}
+            onBlur={(e) => !e.currentTarget.contains(e.relatedTarget as Node | null) && !e.currentTarget.matches(":hover") && later(t)}
+          >
             <span className="toast-text">{t.text}</span>
             {t.action && (
               <button
@@ -212,11 +238,11 @@ function DialogView({ pending }: { pending: Pending }) {
   const cancelBtn = useRef<HTMLButtonElement>(null);
   const actionBtn = useRef<HTMLButtonElement>(null);
   const cancel = () => settle(pending.id, null);
-  const blocked = d.kind === "prompt" && (d.mustMatch !== undefined ? value.trim() !== d.mustMatch : !value.trim());
+  const blocked = d.kind === "prompt" && (d.mustMatch !== undefined ? value.trim() !== d.mustMatch : !d.optional && !value.trim());
   const submit = () => !blocked && settle(pending.id, d.kind === "prompt" ? value : "yes");
 
   useEffect(() => {
-    if (d.kind === "prompt") input.current?.select();
+    if (d.kind === "prompt") d.input === "date" ? input.current?.focus() : input.current?.select();
     // A destructive choice is never the default: Enter on its own shouldn't delete.
     else (d.danger ? cancelBtn : actionBtn).current?.focus();
   }, []);
@@ -234,7 +260,7 @@ function DialogView({ pending }: { pending: Pending }) {
         {d.kind === "prompt" && (
           <label className="field">
             {d.label && <span className="field-label">{d.label}</span>}
-            <input ref={input} value={value} placeholder={d.placeholder} onChange={(e) => setValue(e.target.value)} autoComplete="off" spellCheck={false} data-dialog-input />
+            <input ref={input} type={d.input ?? "text"} value={value} placeholder={d.placeholder} onChange={(e) => setValue(e.target.value)} autoComplete={d.input === "password" ? "current-password" : "off"} spellCheck={false} data-dialog-input />
           </label>
         )}
         <div className="dialog-actions">

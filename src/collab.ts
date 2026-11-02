@@ -20,7 +20,8 @@ import type { ServerWebSocket } from "bun";
 import { sql } from "./db";
 import { persist, setLiveOverwrite, writeBarrier } from "./notes";
 import { assertNoteSize } from "./storage";
-import { applyTextDiff, loadDoc } from "./ydoc";
+import { isCanvasPath } from "./canvas";
+import { applyContent, docContent, loadDoc } from "./ydoc";
 
 const MSG_SYNC = 0;
 const MSG_AWARENESS = 1;
@@ -46,7 +47,10 @@ type Conn = ServerWebSocket<CollabData>;
 interface Room {
   noteId: number;
   doc: Y.Doc;
-  text: Y.Text;
+  /** A board (F11): its document holds cards, not text (src/canvas.ts). */
+  board: boolean;
+  /** The text last read or saved, which a board keeps byte for byte while its cards are unchanged. */
+  content: string;
   awareness: awarenessProtocol.Awareness;
   conns: Map<Conn, Set<number>>; // conn → awareness client ids it controls
   lastEditor: number | null;
@@ -69,13 +73,15 @@ async function openRoom(noteId: number): Promise<Room> {
     // A REST/import write that started before this room existed must land before we read the
     // row, or the room would hold (and later re-save) the old text.
     await writeBarrier(noteId);
-    const [n] = await sql`select content, ydoc from notes where id = ${noteId}`;
+    const [n] = await sql`select path, content, ydoc from notes where id = ${noteId}`;
     if (!n) throw new Error("note not found");
-    const doc = loadDoc(n.content, n.ydoc ? new Uint8Array(n.ydoc) : null);
+    const board = isCanvasPath(n.path);
+    const doc = loadDoc(n.content, n.ydoc ? new Uint8Array(n.ydoc) : null, board);
     const room: Room = {
       noteId,
       doc,
-      text: doc.getText("content"),
+      board,
+      content: n.content,
       awareness: new awarenessProtocol.Awareness(doc),
       conns: new Map(),
       lastEditor: null,
@@ -140,7 +146,9 @@ function save(room: Room): Promise<void> {
   // Saves are serialised per room so an older snapshot can never land after a newer one.
   room.saving = room.saving
     .then(async () => {
-      await persist(room.noteId, room.text.toString(), room.lastEditor, Y.encodeStateAsUpdate(room.doc));
+      const content = docContent(room.doc, room.board, room.content);
+      await persist(room.noteId, content, room.lastEditor, Y.encodeStateAsUpdate(room.doc));
+      room.content = content;
       room.failures = 0;
     })
     .catch((err) => {
@@ -167,10 +175,15 @@ function maybeTeardown(room: Room) {
 setLiveOverwrite((noteId, next, userId) => {
   if (!rooms.has(noteId) && !loading.has(noteId)) return null;
   return openRoom(noteId).then((room) => {
-    const text = typeof next === "string" ? next : next(room.text.toString());
+    const text = typeof next === "string" ? next : next(docContent(room.doc, room.board, room.content));
     assertNoteSize(text);
     room.lastEditor = userId;
-    room.doc.transact(() => applyTextDiff(room.text, text), "server");
+    room.doc.transact(() => applyContent(room.doc, room.board, text), "server");
+    // A board written from outside keeps that exact text unless its cards then change.
+    if (room.board && docContent(room.doc, true, text) === text) room.content = text;
+    // Saved now, not after the typing pause: whoever wrote it reads it back at once (the side
+    // panel after a relationship changes, F31), and the database has it when the request returns.
+    return save(room);
   });
 });
 

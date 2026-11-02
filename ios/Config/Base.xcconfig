@@ -1,0 +1,18 @@
+// DO Notes for iPhone and Mac (ios/README.md). Your Apple team id and your server go in
+// ios/Config/Local.xcconfig (not in git; see ios/README.md), which is read last and wins:
+//   DEVELOPMENT_TEAM = ABCDE12345
+//   LIVE_HOST = notes.example.com
+DEVELOPMENT_TEAM =
+LIVE_HOST = notes.example.com
+CODE_SIGN_STYLE = Automatic
+APP_BUNDLE_ID = com.davidroliver.commonplace
+APP_GROUP = group.com.davidroliver.commonplace
+MARKETING_VERSION = 1.0
+CURRENT_PROJECT_VERSION = 10
+// The Mac app (ios/Mac): the cloud is its default, whatever the build; Settings can change it.
+// On the Mac an app group is named with the team id in front.
+CLOUD_SCHEME = https
+CLOUD_HOST = $(LIVE_HOST)
+MAC_APP_GROUP = $(DEVELOPMENT_TEAM).com.davidroliver.commonplace
+MACOSX_DEPLOYMENT_TARGET = 14.0
+#include? "Local.xcconfig"

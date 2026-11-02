@@ -9,7 +9,8 @@ export type VaultEvent =
   | { type: "note.renamed"; id: number; path: string; from: string; by: number | null }
   | { type: "note.deleted"; id: number; path: string; by: number | null }
   | { type: "folders.changed"; by: number | null }
-  | { type: "vault.changed" };
+  | { type: "vault.changed" }
+  | { type: "comments.changed"; noteId: number; by: number | null };
 
 type Listener = (e: VaultEvent) => void;
 const listeners = new Map<number, Set<Listener>>();

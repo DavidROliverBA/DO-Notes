@@ -45,6 +45,12 @@ describe("links", () => {
     const ls = findWikiLinks(md);
     expect(ls[1]).toMatchObject({ target: "Projects/Beta#Goals", alias: "the plan", embed: false });
   });
+  test("in a table, an aliased link's pipe is written \\| and still ends the target", () => {
+    const md = "| a | b |\n| - | - |\n| [[Alpha\\|first]] | [[Projects/Beta#Goals\\|the plan]] |";
+    expect(extractLinks(md).sort()).toEqual(["alpha", "projects/beta"]);
+    expect(findWikiLinks(md)[0]).toMatchObject({ target: "Alpha", alias: "first" });
+    expect(plainInline("[[Alpha\\|first]]")).toBe("first");
+  });
   test("relative markdown links count, external ones don't", () => {
     expect(extractLinks("[a](Notes/Delta.md) [b](https://x.com) [c](#top) [d](img.png)")).toEqual(["notes/delta"]);
   });
@@ -323,6 +329,16 @@ describe("starter types", () => {
     }
     expect(starterNeeds(STARTERS.find((s: any) => s.name === "Risk"))).toEqual(["Person", "Project"]);
   });
+
+  test("the Architecture set covers every type Floe's folder-of-notes export writes", () => {
+    const { STARTER_SETS } = require("../src/types");
+    const arch = STARTER_SETS.find((s: any) => s.name === "Architecture").types.map((t: string) => t.toLowerCase());
+    expect(arch.sort()).toEqual(["actor", "app", "component", "domain", "landscape", "store", "system"]);
+    const system = STARTERS.find((s: any) => s.name === "System");
+    const status = system.shape.properties.find((p: any) => p.name === "status");
+    expect(status.options).toEqual(["live", "future", "deprecated", "removed"]);
+    expect(system.shape.properties.map((p: any) => p.name)).toContain("floe-id");
+  });
 });
 
 describe("tables as data (F8)", () => {
@@ -345,6 +361,39 @@ describe("tables as data (F8)", () => {
     expect(formatTable(deleteRow(deleteColumn(t, 0), 1))).toBe("| b    |  c  |\n| ---- | :-: |\n| x\\|y |     |");
     expect(splitRow("| `a|b` | c \\| d |")).toEqual(["`a|b`", "c \\| d"]);
     expect(parseTable("not | a table")).toBeNull();
+  });
+  test("move rows and columns; moves past the edge change nothing", () => {
+    const { moveRow, moveColumn } = require("../web/lib/tableModel");
+    const t = parseTable(md);
+    expect(moveRow(t, 1, 0).rows.map((r: string[]) => r[0])).toEqual(["Worktops", "Units"]);
+    expect(moveRow(t, 0, -1)).toBe(t);
+    const m = moveColumn(t, 1, 0);
+    expect(m.header).toEqual(["Cost", "Item"]);
+    expect(m.align).toEqual(["right", null]);
+    expect(m.rows[0]).toEqual(["£4,200", "Units"]);
+    expect(moveColumn(t, 1, 2)).toBe(t);
+  });
+  test("sort by a column: amounts as numbers, words A to Z ignoring case and markup, empty cells last", () => {
+    const { sortBy } = require("../web/lib/tableModel");
+    const t = parseTable("| Name | Cost |\n|---|---|\n| **pear** | £1,200 |\n|  | 90 |\n| [[Apple]] | -5 |\n| banana |  |\n| Item 10 | 7.5% |\n| Item 9 | £1,200 |");
+    expect(sortBy(t, 0, "asc").rows.map((r: string[]) => r[0])).toEqual(["[[Apple]]", "banana", "Item 9", "Item 10", "**pear**", ""]);
+    expect(sortBy(t, 0, "desc").rows.map((r: string[]) => r[0])).toEqual(["**pear**", "Item 10", "Item 9", "banana", "[[Apple]]", ""]);
+    // Equal values keep their order; the empty cell stays last both ways.
+    expect(sortBy(t, 1, "asc").rows.map((r: string[]) => r[1])).toEqual(["-5", "7.5%", "90", "£1,200", "£1,200", ""]);
+    expect(sortBy(t, 1, "asc").rows.filter((r: string[]) => r[1] === "£1,200").map((r: string[]) => r[0])).toEqual(["**pear**", "Item 9"]);
+    expect(sortBy(t, 1, "desc").rows.map((r: string[]) => r[1])).toEqual(["£1,200", "£1,200", "90", "7.5%", "-5", ""]);
+  });
+  test("a range copied from a spreadsheet: a new table, or cells filled from where it's pasted", () => {
+    const { parseGrid, tableFromGrid, pasteGrid } = require("../web/lib/tableModel");
+    const grid = parseGrid('Firm\tPrice\r\nAcme\t100\r\n"Brick, ""& Co"""\t95\r\n');
+    expect(grid).toEqual([["Firm", "Price"], ["Acme", "100"], ['Brick, "& Co"', "95"]]);
+    expect(formatTable(tableFromGrid(grid))).toBe('| Firm          | Price |\n| ------------- | ----- |\n| Acme          | 100   |\n| Brick, "& Co" | 95    |');
+    expect(parseGrid("plain text\nno tabs")).toBeNull();
+    expect(parseGrid("a\tb\nc")).toBeNull(); // ragged
+    // From Units' cost, two rows down and two columns across: a row and a column are added.
+    const t = pasteGrid(parseTable(md), 0, 1, [["1", "x"], ["2", "y"], ["3", "z"]]);
+    expect(t.header).toEqual(["Item", "Cost", ""]);
+    expect(t.rows).toEqual([["Units", "1", "x"], ["Worktops", "2", "y"], ["", "3", "z"]]);
   });
 });
 

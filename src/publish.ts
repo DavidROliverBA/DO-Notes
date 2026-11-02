@@ -19,7 +19,9 @@ import { resolveLocal } from "../web/lib/links";
 import { hiloColour } from "../web/lib/colours";
 import { HttpError, isSecure, type User } from "./auth";
 import { sql } from "./db";
-import { extractLinks, extractTags, findWikiLinks, isAttachmentPath, maskCode, normalisePath, parseFrontmatter, plainInline, sectionRange, SITE_SETTINGS } from "./markdown";
+import { codeBlockHtml } from "./codeHighlight";
+import { countWords, extractLinks, extractTags, findWikiLinks, headings, isAttachmentPath, maskCode, normalisePath, parseFrontmatter, plainInline, readingMinutes, sectionRange, SITE_SETTINGS } from "./markdown";
+import { STATUS_RE, statusColour, TOC_RE, tocHtml } from "./blocks";
 import { listNotes } from "./notes";
 import { assertRoom } from "./storage";
 import { inlineQuery, type PageData, readPage, runInline, runQuery, Vault } from "./dataview";
@@ -126,12 +128,17 @@ function resolveFile(files: string[], notePath: string, target: string): string 
   return best;
 }
 
-/** Hidden text: %%comments%% (an unclosed one hides the rest) and ^block-ids. */
+/** Hidden text: %%comments%% (an unclosed one hides the rest), ^block-ids, and a daily note's
+ *  `## Journal` section (F24: the journal is private, even on a site of the whole collection). */
 function stripHidden(md: string): string {
   const masked = maskCode(md);
   const cuts: [number, number][] = [];
   for (const m of masked.matchAll(/%%[\s\S]*?(?:%%|$(?![\s\S]))/g)) cuts.push([m.index!, m.index! + m[0].length]);
   for (const m of masked.matchAll(/[ \t]\^[\w-]+[ \t]*$/gm)) cuts.push([m.index!, m.index! + m[0].length]);
+  const headings = [...masked.matchAll(/^#{1,2}[ \t].*$/gm)];
+  headings.forEach((h, i) => {
+    if (/^##[ \t]+journal[ \t]*$/i.test(h[0])) cuts.push([h.index!, headings[i + 1]?.index ?? masked.length]);
+  });
   cuts.sort((a, b) => a[0] - b[0]);
   let out = "";
   let at = 0;
@@ -391,7 +398,7 @@ function renderNote(note: Chosen, from: string, c: RenderCtx, depth = 0, toc?: T
         level: "inline",
         start: (src: string) => src.match(/!?\[\[/)?.index,
         tokenizer(src: string) {
-          const m = /^(!?)\[\[([^\[\]|\n]+?)(?:\|([^\[\]\n]*))?\]\]/.exec(src);
+          const m = /^(!?)\[\[([^\[\]|\n]+?)(?:\\?\|([^\[\]\n]*))?\]\]/.exec(src);
           if (m) return { type: "wikilink", raw: m[0], embed: m[1] === "!", target: m[2]!.trim(), alias: m[3]?.trim() };
         },
         renderer(t: any) {
@@ -423,6 +430,19 @@ function renderNote(note: Chosen, from: string, c: RenderCtx, depth = 0, toc?: T
         },
       },
       {
+        // :status[Done]{.green}: a coloured label (F28).
+        name: "status",
+        level: "inline",
+        start: (src: string) => src.indexOf(":status["),
+        tokenizer(src: string) {
+          const m = STATUS_RE.exec(src);
+          if (m) return { type: "status", raw: m[0], label: m[1]!, colour: statusColour(m[2]) };
+        },
+        renderer(t: any) {
+          return `<span class="status status-${t.colour}">${esc(t.label)}</span>`;
+        },
+      },
+      {
         name: "tag",
         level: "inline",
         start: (src: string) => src.match(/(^|\s)#[\p{L}_\-/]/u)?.index,
@@ -448,7 +468,9 @@ function renderNote(note: Chosen, from: string, c: RenderCtx, depth = 0, toc?: T
             return n ? pageHref(n, anchor(target)) : null;
           })}</div>\n`;
         }
-        if (kind !== "dataview") return false;
+        // A diagram shows as its source (pages run no script); other code, coloured.
+        if (kind === "mermaid") return false;
+        if (kind !== "dataview") return codeBlockHtml(text, lang, esc, false);
         return `<div class="dataview-block">${renderResult(runQuery(text, c.dv, { thisPath: note.path, offset: c.offset, tz: c.tz }), dvOpts)}</div>\n`;
       },
       codespan({ text }: Tokens.Codespan) {
@@ -490,7 +512,8 @@ function renderNote(note: Chosen, from: string, c: RenderCtx, depth = 0, toc?: T
         const f = EXTERNAL.test(href) ? undefined : resolveFile(c.files, note.path, href);
         return f ? fileEmbed(f, text) : esc(text);
       },
-      paragraph({ tokens }: Tokens.Paragraph) {
+      paragraph({ tokens, raw }: Tokens.Paragraph) {
+        if (TOC_RE.test(raw)) return tocHtml(headings(body), (h) => "#" + encodeURIComponent(headingId(h.text)), esc) + "\n";
         // A note embed alone in its paragraph becomes a block holding the other page's text.
         const only = tokens.filter((x) => !(x.type === "text" && !x.raw.trim()));
         const one = only.length === 1 ? (only[0] as any) : null;
@@ -502,12 +525,14 @@ function renderNote(note: Chosen, from: string, c: RenderCtx, depth = 0, toc?: T
       },
       blockquote({ tokens }: Tokens.Blockquote) {
         const inner = this.parser.parse(tokens);
-        const m = /^<p>\[!([\w-]+)\][+-]?[ \t]*([^\n<]*)(?:\n|<br>)?/i.exec(inner);
+        const m = /^<p>\[!([\w-]+)\]([+-]?)[ \t]*([^\n<]*)(?:\n|<br>)?/i.exec(inner);
         if (!m) return `<blockquote>${inner}</blockquote>`;
         const type = m[1]!.toLowerCase();
-        const title = m[2]!.trim() || type[0]!.toUpperCase() + type.slice(1);
+        const title = m[3]!.trim() || type[0]!.toUpperCase() + type.slice(1);
         let rest = inner.slice(m[0].length);
         rest = /^\s*<\/p>/.test(rest) ? rest.replace(/^\s*<\/p>/, "") : `<p>${rest}`;
+        // [!type]- folds closed and [!type]+ open (F28's Expand), with no script: <details>.
+        if (m[2]) return `<details class="callout" data-callout="${esc(type)}"${m[2] === "+" ? " open" : ""}><summary class="callout-title">${esc(title)}</summary><div class="callout-body">${rest}</div></details>`;
         return `<div class="callout" data-callout="${esc(type)}"><div class="callout-title">${esc(title)}</div><div class="callout-body">${rest}</div></div>`;
       },
     },
@@ -567,7 +592,7 @@ function pageMeta(n: Chosen, backlinks: Map<number, Chosen[]>): PageMeta {
     backlinks: (backlinks.get(n.id) ?? []).map((b) => ({ path: pagePath(b.path), title: b.title })).sort((a, b) => a.title.localeCompare(b.title)),
     tags: extractTags(fm + shown),
     updated: new Date(n.updated_at).toISOString(),
-    words: shown.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length,
+    words: countWords(shown),
   };
 }
 
@@ -799,7 +824,7 @@ function pageMain(view: SiteView, p: SitePage & { html: string }, from: string):
   const root = rootFrom(from);
   const facts = [
     f.updated && m.updated ? `Updated <time datetime="${esc(m.updated)}">${esc(dateText(m.updated, view.tz))}</time>` : "",
-    f.readingTime && m.words !== undefined ? `${Math.max(1, Math.round(m.words / 220))} min read` : "",
+    f.readingTime && m.words !== undefined ? `${readingMinutes(m.words)} min read` : "",
   ].filter(Boolean);
   let out = `<h1>${esc(p.title)}</h1>\n`;
   if (facts.length) out += `<p class="site-facts">${facts.join(" · ")}</p>\n`;
@@ -965,3 +990,52 @@ export async function previewSite(vaultId: number, req: Request): Promise<Respon
   };
   return respond(view, req, path);
 }
+
+// ── one note by link (F38, src/shareLink.ts) ────────────────────────────────────────────────
+
+/** One note drawn as a published page would be. Nothing else is shared, so a link to any other
+ *  note shows as plain words, and only the files this note shows come along. */
+export async function renderSingle(vaultId: number, noteId: number, tz?: string): Promise<{ title: string; page: string; html: string; files: string[]; md5: string }> {
+  const [n] = await sql<Chosen[]>`select id, path, title, content, md5(content) as md5, created_at, updated_at from notes where id = ${noteId} and vault_id = ${vaultId}`;
+  if (!n) throw new HttpError(404, "Note not found");
+  const all = (await sql<{ path: string }[]>`select path from attachments where vault_id = ${vaultId} and path <> ${SITE_SETTINGS}`).map((f) => f.path);
+  const files = fileRefs(all, n.path, n.content);
+  const ctx: RenderCtx = {
+    all: (await listNotes(vaultId)) as RenderCtx["all"],
+    published: new Map([[n.id, n]]),
+    files,
+    dv: new Vault([readPage({ path: n.path, content: n.content, ctime: new Date(n.created_at).getTime(), mtime: new Date(n.updated_at).getTime() })]),
+    offset: 0,
+    tz,
+    frozen: new Map(),
+    features: {},
+  };
+  return { title: n.title, page: pagePath(n.path), html: renderNote(n, pagePath(n.path), ctx), files, md5: n.md5 };
+}
+
+/** The shared note's page: its title, when it was shared, its text. No script, as a site's. */
+export function sharedPage(page: string, title: string, html: string, updated: Date): string {
+  const root = rootFrom(page);
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="color-scheme" content="light dark">
+<title>${esc(title)}</title>
+<link rel="stylesheet" href="${root}_share/style.css">
+</head>
+<body class="site">
+<div class="site-body">
+<main id="main" class="site-main markdown">
+<h1>${esc(title)}</h1>
+<p class="site-facts">Shared from DO Notes · <time datetime="${esc(updated.toISOString())}">${esc(dateText(updated.toISOString()))}</time></p>
+${html}
+</main>
+</div>
+</body>
+</html>`;
+}
+
+export { PAGE_HEADERS as SHARE_PAGE_HEADERS, stylesheet as siteStylesheet, encodePath as encodeSitePath };

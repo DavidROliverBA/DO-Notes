@@ -4,17 +4,32 @@
 
 import { useEffect, useState } from "react";
 
+// The standalone file (standalone/) is opened from disk, where history can't hold the app's
+// paths: keepInMemory() makes it keep the path (and its ?query) in memory instead.
+let memory: string | null = null;
+export const keepInMemory = (start = "/") => void (memory = start);
+const here = () => memory ?? location.pathname + location.search;
+export const currentPath = () => (memory ?? location.pathname).replace(/\?.*$/, "");
+export const currentSearch = () => (memory === null ? location.search : memory.includes("?") ? memory.slice(memory.indexOf("?")) : "");
+
 export function navigate(path: string, replace = false) {
-  if (path === location.pathname + location.search) return;
-  if (replace) history.replaceState(null, "", path);
+  if (path === here()) return;
+  if (memory !== null) memory = path;
+  else if (replace) history.replaceState(null, "", path);
   else history.pushState(null, "", path);
   window.dispatchEvent(new Event("cp:navigate"));
 }
 
+/** Change the ?query without telling anyone (a page keeping its own state in the address). */
+export function replaceQuietly(path: string) {
+  if (memory !== null) memory = path;
+  else history.replaceState(history.state, "", path);
+}
+
 export function usePath(): string {
-  const [path, setPath] = useState(location.pathname);
+  const [path, setPath] = useState(currentPath);
   useEffect(() => {
-    const on = () => setPath(location.pathname);
+    const on = () => setPath(currentPath());
     window.addEventListener("popstate", on);
     window.addEventListener("cp:navigate", on);
     return () => {
@@ -32,6 +47,7 @@ export type Route =
   | { page: "graph"; vaultId: number }
   | { page: "type"; vaultId: number; name: string }
   | { page: "tasks"; vaultId: number }
+  | { page: "journal"; vaultId: number }
   | { page: "changes"; vaultId: number };
 
 export function parseRoute(path: string): Route {
@@ -41,6 +57,8 @@ export function parseRoute(path: string): Route {
   if (m) return { page: "type", vaultId: Number(m[1]), name: decodeURIComponent(m[2]!) };
   m = /^\/v\/(\d+)\/tasks/.exec(path);
   if (m) return { page: "tasks", vaultId: Number(m[1]) };
+  m = /^\/v\/(\d+)\/journal/.exec(path);
+  if (m) return { page: "journal", vaultId: Number(m[1]) };
   m = /^\/v\/(\d+)\/changes/.exec(path);
   if (m) return { page: "changes", vaultId: Number(m[1]) };
   m = /^\/v\/(\d+)\/graph/.exec(path);

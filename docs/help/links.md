@@ -4,7 +4,7 @@ standalone: true
 ---
 # Links and embeds
 
-Links turn a pile of notes into a web of ideas. Commonplace keeps track of every link in both directions.
+Links turn a pile of notes into a web of ideas. DO Notes keeps track of every link in both directions.
 
 ## Linking to a note
 
@@ -17,9 +17,11 @@ Type `[[` and start typing a note's name, then pick it from the list.
 | `[[Tomatoes#Blight]]` | The *Blight* heading in that note |
 | `[[Garden/Plants/Tomatoes]]` | A note by its full path, when two share a name |
 
-A link can also use one of the note's `aliases` (a property listing other names for it).
+A link can also use one of the note's `aliases` (a property listing other names for it). The list after `[[` finds notes by their aliases too, and picking one writes `[[Tomatoes|Love apples]]`, so the link still shows the name you chose.
 
-`⌘`-click a link to follow it, or put the cursor in it and tap **Open ↗**. In Reading view, click it.
+After the note's name, type `#` to choose one of its headings: `[[Tomatoes#` lists *Tomatoes*' headings, and `[[#` lists the headings of the note you're in. (Not in the standalone file.)
+
+`⌘`-click a link to follow it, or put the cursor in it and tap **Open ↗**. In Reading view, click it. To glance at a note without leaving this one, rest the pointer on the link for a moment: the start of the note (or of the heading, for `[[Note#Heading]]`) appears beside it. (On a laptop; not in the standalone file.)
 
 A link to a note that doesn't exist yet is shown faded. Follow it to make the note, and you can choose whether it's a plain note or one of your [types](types.md). The link works as soon as the note exists.
 

@@ -23,6 +23,29 @@ export function commandScore(q: string, c: Pick<Command, "title" | "group" | "ke
   return total;
 }
 
+/** Commands for a search box (Find a note, the Search tab): someone typing "tour" or "history"
+ *  there means the command. Stricter than the palette: each word must start a word of the
+ *  command's title or keywords, at least three letters in all, and nothing from the / menu. */
+export function findCommands(q: string, limit = 3): Command[] {
+  const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.join("").length < 3) return [];
+  return available()
+    .filter((c) => c.group !== "Insert")
+    .filter((c) => {
+      const hay = `${c.title} ${c.keywords ?? ""}`.toLowerCase().split(/[^\p{L}\p{N}]+/u);
+      return words.every((w) => hay.some((h) => h.startsWith(w)));
+    })
+    .map((c) => ({ c, s: commandScore(q, c) }))
+    .sort((a, b) => b.s - a.s)
+    .slice(0, limit)
+    .map((x) => x.c);
+}
+
+/** Run a command once the box it was chosen in has closed, so focus lands where it puts it. */
+export function runCommandSoon(c: Command): void {
+  requestAnimationFrame(() => (c.href ? (location.href = c.href(currentCtx())) : c.run(currentCtx())));
+}
+
 export function CommandPalette({ onClose }: { onClose: () => void }) {
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
@@ -41,8 +64,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     if (!c) return;
     ran.current = true;
     onClose();
-    // After the palette has gone, so focus lands where the command puts it.
-    requestAnimationFrame(() => (c.href ? (location.href = c.href(currentCtx())) : c.run(currentCtx())));
+    runCommandSoon(c);
   }
 
   return (
